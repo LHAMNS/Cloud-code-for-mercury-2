@@ -1,8 +1,10 @@
 // Mercury Code - REPL (Read-Eval-Print Loop)
 // Handles user input, sends messages to Mercury-2, processes tool calls,
-// and displays results. Integrates session history, rollback, and ESC undo.
+// and displays results. Includes Codex-style framing, permission system,
+// auto-recovery, session history, rollback, and ESC undo.
 
 import readline from "node:readline";
+import path from "node:path";
 import { MercuryClient } from "./client.js";
 import { Conversation } from "./conversation.js";
 import { buildSystemPrompt } from "./system-prompt.js";
@@ -23,17 +25,30 @@ import {
   printTokenUsage,
   printStreamChunk,
   printStreamEnd,
+  printResponseHeader,
+  printResponseFooter,
   printRollbackUI,
   printRollbackConfirm,
   printSessionList,
   spinner,
 } from "./ui/display.js";
 
-// Maximum number of agentic tool-call turns before forcing a stop
+// Maximum agentic tool-call turns before forcing a stop
 const MAX_TOOL_TURNS = 100;
-
+// Maximum auto-recovery attempts for truncated output
+const MAX_AUTO_RECOVER = 3;
 // ESC detection: triple-press within this window triggers rollback
 const ESC_WINDOW_MS = 800;
+
+// Trust modes
+const TRUST_READONLY = "readonly";
+const TRUST_APPROVAL = "approval";
+const TRUST_OPEN = "open";
+
+// Read-only tools (allowed in all modes)
+const READ_TOOLS = new Set(["Read", "Glob", "Grep", "ListDir", "Diff", "Fetch"]);
+// Write tools (need checking in approval mode)
+const WRITE_TOOLS = new Set(["Write", "Edit", "Patch"]);
 
 export class MercuryRepl {
   constructor(options = {}) {
@@ -42,18 +57,25 @@ export class MercuryRepl {
       apiKey: options.apiKey,
       baseURL: options.baseURL,
     });
-    this.memory = new MemoryManager(process.cwd());
-    this.log = new ConversationLog(process.cwd());
-    this.conversation = new Conversation(buildSystemPrompt(process.cwd()));
-    this.history = new SessionHistory();
-    this.rollback = new RollbackManager(process.cwd());
     this.verbose = options.verbose || false;
     this.superCompress = false;
-    this.contextSearchEnabled = false; // Expensive tool — user must enable with /contextsearch
+    this.contextSearchEnabled = false;
     this._rl = null;
     this._toolTurnCount = 0;
     this._processing = false;
     this._sessionId = this._generateSessionId();
+
+    // Workspace and trust
+    this.workspace = options.workspace || process.cwd();
+    this.trustMode = options.trustMode || TRUST_APPROVAL;
+    this.allowOutsideWorkspace = false;
+
+    // These will be initialized after workspace is chosen
+    this.memory = null;
+    this.log = null;
+    this.conversation = null;
+    this.history = new SessionHistory();
+    this.rollback = null;
 
     // ESC tracking
     this._escPresses = [];
@@ -70,17 +92,28 @@ export class MercuryRepl {
   // ── Interactive mode ─────────────────────────────────────────────────────
 
   async start() {
-    await this.conversation.loadMemory(this.memory);
-    printWelcome();
-
     this._rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
-      prompt: "\x1b[38;5;87m\x1b[1m❯ \x1b[0m",
+      prompt: "\x1b[38;5;87m\x1b[1m> \x1b[0m",
     });
 
+    // Interactive setup flow: workspace + trust mode
+    await this._startupFlow();
+
+    // Init workspace-dependent components
+    this.memory = new MemoryManager(this.workspace);
+    this.log = new ConversationLog(this.workspace);
+    this.rollback = new RollbackManager(this.workspace);
+    this.conversation = new Conversation(buildSystemPrompt(this.workspace, this.trustMode));
+    await this.conversation.loadMemory(this.memory);
+
+    printWelcome();
+    printInfo(`Workspace: ${this.workspace}`);
+    printInfo(`Trust: ${this._trustLabel(this.trustMode)}`);
+    console.log("");
+
     // Enable keypress events for ESC detection
-    // Must be called BEFORE readline manages stdin, and readline handles raw mode itself
     if (process.stdin.isTTY) {
       readline.emitKeypressEvents(process.stdin, this._rl);
       this._setupKeyListener();
@@ -103,22 +136,61 @@ export class MercuryRepl {
     this._rl.prompt();
   }
 
-  /**
-   * Set up raw keyboard listener for ESC detection.
-   */
+  // ── Startup flow (workspace + trust selection) ────────────────────────────
+
+  async _startupFlow() {
+    console.log("");
+    console.log("\x1b[1m\x1b[38;5;87m  Mercury Code\x1b[0m");
+    console.log("\x1b[90m  ─────────────────────────────────────────────\x1b[0m");
+    console.log("");
+
+    // Workspace selection
+    const cwd = process.cwd();
+    const ws = await this._ask(
+      `\x1b[38;5;75m  Workspace\x1b[0m \x1b[2m[${cwd}]\x1b[0m\x1b[38;5;75m:\x1b[0m `
+    );
+    this.workspace = ws.trim() ? path.resolve(ws.trim()) : cwd;
+
+    console.log("");
+    console.log("\x1b[38;5;75m  Trust mode:\x1b[0m");
+    console.log("    \x1b[33m1\x1b[0m \x1b[2mRead-only    \u2014 model can only read, no writes or commands\x1b[0m");
+    console.log("    \x1b[33m2\x1b[0m \x1b[2mApproval     \u2014 asks before dangerous ops (recommended)\x1b[0m");
+    console.log("    \x1b[33m3\x1b[0m \x1b[2mFull open    \u2014 all ops within workspace allowed\x1b[0m");
+    console.log("");
+
+    const modeStr = await this._ask("\x1b[38;5;75m  Select\x1b[0m \x1b[2m[2]\x1b[0m\x1b[38;5;75m:\x1b[0m ");
+    const modeNum = parseInt(modeStr.trim(), 10);
+    if (modeNum === 1) this.trustMode = TRUST_READONLY;
+    else if (modeNum === 3) this.trustMode = TRUST_OPEN;
+    else this.trustMode = TRUST_APPROVAL;
+
+    console.log("");
+  }
+
+  _ask(prompt) {
+    return new Promise((resolve) => {
+      this._rl.question(prompt, (answer) => resolve(answer));
+    });
+  }
+
+  _trustLabel(mode) {
+    switch (mode) {
+      case TRUST_READONLY: return "Read-only (only read operations allowed)";
+      case TRUST_APPROVAL: return "Approval (asks before writes/commands)";
+      case TRUST_OPEN: return "Full open (all ops within workspace)";
+      default: return mode;
+    }
+  }
+
+  // ── ESC detection ─────────────────────────────────────────────────────────
+
   _setupKeyListener() {
     process.stdin.on("keypress", (str, key) => {
       if (!key) return;
-
-      // Detect ESC key
       if (key.name === "escape" && !this._processing) {
         const now = Date.now();
-        // Remove old presses outside the window
-        this._escPresses = this._escPresses.filter(
-          (t) => now - t < ESC_WINDOW_MS
-        );
+        this._escPresses = this._escPresses.filter((t) => now - t < ESC_WINDOW_MS);
         this._escPresses.push(now);
-
         if (this._escPresses.length >= 3) {
           this._escPresses = [];
           this._enterRollbackMode().catch(() => {});
@@ -130,6 +202,10 @@ export class MercuryRepl {
   // ── Single-shot mode ─────────────────────────────────────────────────────
 
   async runOnce(promptText) {
+    this.memory = new MemoryManager(this.workspace);
+    this.log = new ConversationLog(this.workspace);
+    this.rollback = new RollbackManager(this.workspace);
+    this.conversation = new Conversation(buildSystemPrompt(this.workspace, this.trustMode));
     await this.conversation.loadMemory(this.memory);
     this.conversation.addUserMessage(promptText);
     await this.log.append({ role: "user", content: promptText });
@@ -159,12 +235,7 @@ export class MercuryRepl {
       return;
     }
 
-    // Create a rollback checkpoint before processing
-    // Use .messages directly (not getMessages which prepends system prompt)
-    this.rollback.createCheckpoint(
-      trimmed,
-      this.conversation.messages
-    );
+    this.rollback.createCheckpoint(trimmed, this.conversation.messages);
 
     this.conversation.addUserMessage(trimmed);
     await this.log.append({ role: "user", content: trimmed });
@@ -180,9 +251,72 @@ export class MercuryRepl {
     this._rl.prompt();
   }
 
-  // ── Core loop: send to Mercury-2 and process the response ────────────────
+  // ── Permission check ─────────────────────────────────────────────────────
+
+  _checkPermission(toolName, args) {
+    // Read tools always allowed
+    if (READ_TOOLS.has(toolName) || toolName === "ContextSearch") {
+      return { allowed: true, needsApproval: false };
+    }
+
+    // SubAgent/SubAgentTeam: allowed except readonly
+    if (toolName === "SubAgent" || toolName === "SubAgentTeam") {
+      if (this.trustMode === TRUST_READONLY) {
+        return { allowed: false, needsApproval: false, reason: "Read-only mode: sub-agents disabled" };
+      }
+      return { allowed: true, needsApproval: false };
+    }
+
+    // Readonly: block all writes and commands
+    if (this.trustMode === TRUST_READONLY) {
+      return { allowed: false, needsApproval: false, reason: `Read-only mode: ${toolName} blocked` };
+    }
+
+    // Check workspace boundary for file operations
+    const filePath = args.file_path || args.path;
+    if (filePath && WRITE_TOOLS.has(toolName)) {
+      const resolved = path.resolve(filePath);
+      const inWorkspace = resolved.startsWith(this.workspace + path.sep) || resolved === this.workspace;
+      if (!inWorkspace && !this.allowOutsideWorkspace) {
+        if (this.trustMode === TRUST_OPEN) {
+          return { allowed: false, needsApproval: false, reason: `Outside workspace: ${resolved}` };
+        }
+        return { allowed: true, needsApproval: true, reason: `File outside workspace: ${resolved}` };
+      }
+    }
+
+    // Approval mode: Bash always needs approval
+    if (this.trustMode === TRUST_APPROVAL && toolName === "Bash") {
+      return { allowed: true, needsApproval: true, reason: null };
+    }
+
+    // Approval mode: writes within workspace are allowed
+    if (this.trustMode === TRUST_APPROVAL && WRITE_TOOLS.has(toolName)) {
+      return { allowed: true, needsApproval: false };
+    }
+
+    return { allowed: true, needsApproval: false };
+  }
+
+  async _requestApproval(toolName, args, reason) {
+    const detail = reason || `${toolName} requires approval`;
+    console.log(`\x1b[33m  ? ${detail}\x1b[0m`);
+
+    if (toolName === "Bash" && args.command) {
+      console.log(`\x1b[90m    $ ${args.command.length > 100 ? args.command.slice(0, 100) + "..." : args.command}\x1b[0m`);
+    }
+
+    const answer = await this._ask("\x1b[33m  Allow? (y/n) \x1b[0m");
+    return answer.trim().toLowerCase().startsWith("y");
+  }
+
+  // ── Core loop ────────────────────────────────────────────────────────────
 
   async _sendAndProcess() {
+    let autoRecoverCount = 0;
+
+    printResponseHeader();
+
     while (true) {
       await this.conversation.compress(
         this.client,
@@ -198,16 +332,20 @@ export class MercuryRepl {
         const chunks = [];
         let firstChunk = true;
 
-        // Dynamically build tools list — exclude ContextSearch when disabled
         const activeTools = this.contextSearchEnabled
           ? TOOL_DEFINITIONS
-          : TOOL_DEFINITIONS.filter(t => t.function.name !== 'ContextSearch');
+          : TOOL_DEFINITIONS.filter((t) => t.function.name !== "ContextSearch");
 
-        let inReasoning = false; // Track whether we're in reasoning output
+        // In readonly mode, only allow read tools
+        const permittedTools = this.trustMode === TRUST_READONLY
+          ? activeTools.filter((t) => READ_TOOLS.has(t.function.name) || t.function.name === "ContextSearch")
+          : activeTools;
+
+        let inReasoning = false;
 
         for await (const chunk of this.client.chatCompletionStream(
           this.conversation.getMessages(),
-          { tools: activeTools }
+          { tools: permittedTools }
         )) {
           if (firstChunk) {
             spinner.stop();
@@ -216,28 +354,26 @@ export class MercuryRepl {
           chunks.push(chunk);
           const delta = chunk.choices?.[0]?.delta;
 
-          // Handle reasoning/thinking output (Mercury-2 chain-of-thought)
           const reasoning = delta?.reasoning_content || delta?.reasoning;
           if (reasoning) {
             if (!inReasoning) {
               inReasoning = true;
-              printStreamChunk("\x1b[2m\x1b[3m💭 "); // Dim italic for reasoning
+              printStreamChunk("\x1b[2m\x1b[3m\ud83d\udcad ");
             }
             printStreamChunk(reasoning);
           }
 
-          // Handle actual content output
           if (delta?.content) {
             if (inReasoning) {
               inReasoning = false;
-              printStreamChunk("\x1b[0m\n"); // Reset formatting, newline
+              printStreamChunk("\x1b[0m\n");
             }
             printStreamChunk(delta.content);
           }
         }
 
         if (firstChunk) spinner.stop();
-        if (inReasoning) printStreamChunk("\x1b[0m\n"); // Close reasoning formatting
+        if (inReasoning) printStreamChunk("\x1b[0m\n");
         response = this._assembleStreamResponse(chunks);
         if (response.content) printStreamEnd();
         if (response.usage) this.conversation.updateUsage(response.usage);
@@ -245,20 +381,36 @@ export class MercuryRepl {
         spinner.stop();
         printError(`API error: ${err.message}`);
         if (this.verbose) console.error(err.stack);
+        printResponseFooter();
         return;
       }
 
-      // ── Tool calls ──────────────────────────────────────────────────────
+      // Auto-recovery for truncated output
+      if (
+        response.finish_reason === "length" &&
+        !response.tool_calls &&
+        autoRecoverCount < MAX_AUTO_RECOVER
+      ) {
+        autoRecoverCount++;
+        printInfo(`Output truncated \u2014 auto-recovering (${autoRecoverCount}/${MAX_AUTO_RECOVER})...`);
+        this.conversation.addAssistantMessage(response.content || "");
+        this.conversation.addUserMessage(
+          "[System: Your previous output was truncated due to length. Continue from where you left off.]"
+        );
+        continue;
+      }
+
+      // Tool calls
       if (response.tool_calls && response.tool_calls.length > 0) {
         this._toolTurnCount++;
+        autoRecoverCount = 0;
 
         if (this._toolTurnCount > MAX_TOOL_TURNS) {
-          printError(
-            `Reached maximum tool-call turns (${MAX_TOOL_TURNS}). Stopping.`
-          );
+          printError(`Max tool turns (${MAX_TOOL_TURNS}) reached.`);
           this.conversation.addAssistantMessage(
-            response.content || "(Stopped: maximum tool-call turns reached)"
+            response.content || "(Stopped: max tool turns)"
           );
+          printResponseFooter();
           return;
         }
 
@@ -285,54 +437,66 @@ export class MercuryRepl {
             printError(`Bad arguments for tool "${fnName}"`);
           }
 
-          printToolCall(fnName, args);
-          const result = await this.toolExecutor.execute(
-            fnName.toLowerCase(),
-            args
-          );
+          const perm = this._checkPermission(fnName, args);
+
+          if (!perm.allowed) {
+            printToolCall(fnName, args);
+            const errMsg = `Blocked: ${perm.reason}`;
+            printToolResult(errMsg);
+            this.conversation.addToolResult(tc.id, errMsg);
+            await this.log.append({ role: "tool", name: fnName, result: errMsg });
+            continue;
+          }
+
+          if (perm.needsApproval) {
+            printToolCall(fnName, args);
+            const approved = await this._requestApproval(fnName, args, perm.reason);
+            if (!approved) {
+              const errMsg = "User denied this operation.";
+              printToolResult(errMsg);
+              this.conversation.addToolResult(tc.id, errMsg);
+              await this.log.append({ role: "tool", name: fnName, result: errMsg });
+              continue;
+            }
+          } else {
+            printToolCall(fnName, args);
+          }
+
+          const result = await this.toolExecutor.execute(fnName.toLowerCase(), args);
           printToolResult(result);
           this.conversation.addToolResult(tc.id, String(result));
-          await this.log.append({
-            role: "tool",
-            name: fnName,
-            result: String(result),
-          });
+          await this.log.append({ role: "tool", name: fnName, result: String(result) });
         }
 
         continue;
       }
 
-      // ── Plain text response — exit the loop ──────────────────────────────
+      // Final text response
       this.conversation.addAssistantMessage(response.content || "");
-      await this.log.append({
-        role: "assistant",
-        content: response.content,
-      });
+      await this.log.append({ role: "assistant", content: response.content });
       if (response.usage) printTokenUsage(response.usage);
+      printResponseFooter();
       return;
     }
   }
 
-  // ── Rollback Mode (triple ESC) ─────────────────────────────────────────
+  // ── Rollback Mode ─────────────────────────────────────────────────────────
 
   async _enterRollbackMode() {
     const checkpoints = this.rollback.getCheckpoints();
     if (checkpoints.length === 0) {
-      printInfo("没有可用的检查点。需要先发送至少一条消息。");
+      printInfo("No checkpoints available.");
       return;
     }
 
     this._inRollbackMode = true;
     let selectedIdx = 0;
-    let phase = "select"; // "select" or "confirm"
+    let phase = "select";
     let confirmIdx = 0;
 
     const render = () => {
-      if (phase === "select") {
-        printRollbackUI(checkpoints, selectedIdx);
-      } else {
-        printRollbackConfirm(checkpoints[selectedIdx], confirmIdx);
-      }
+      if (phase === "select") printRollbackUI(checkpoints, selectedIdx);
+      else printRollbackConfirm(checkpoints[selectedIdx], confirmIdx);
     };
 
     render();
@@ -340,77 +504,41 @@ export class MercuryRepl {
     return new Promise((resolve) => {
       const onKey = (str, key) => {
         if (!key) return;
-
-        if (key.name === "escape") {
-          // Exit rollback mode
-          cleanup();
-          return;
-        }
+        if (key.name === "escape") { cleanup(); return; }
 
         if (phase === "select") {
-          if (key.name === "up" && selectedIdx > 0) {
-            selectedIdx--;
-            render();
-          } else if (key.name === "down" && selectedIdx < checkpoints.length - 1) {
-            selectedIdx++;
-            render();
-          } else if (key.name === "return") {
-            phase = "confirm";
-            confirmIdx = 0;
-            render();
-          }
-        } else if (phase === "confirm") {
-          if (key.name === "up" && confirmIdx > 0) {
-            confirmIdx--;
-            render();
-          } else if (key.name === "down" && confirmIdx < 2) {
-            confirmIdx++;
-            render();
-          } else if (key.name === "return") {
-            executeRollback(confirmIdx);
-            cleanup();
-          }
+          if (key.name === "up" && selectedIdx > 0) { selectedIdx--; render(); }
+          else if (key.name === "down" && selectedIdx < checkpoints.length - 1) { selectedIdx++; render(); }
+          else if (key.name === "return") { phase = "confirm"; confirmIdx = 0; render(); }
+        } else {
+          if (key.name === "up" && confirmIdx > 0) { confirmIdx--; render(); }
+          else if (key.name === "down" && confirmIdx < 2) { confirmIdx++; render(); }
+          else if (key.name === "return") { executeRollback(confirmIdx); cleanup(); }
         }
       };
 
       const executeRollback = (option) => {
         const cpIndex = checkpoints[selectedIdx].index;
-
         if (option === 0) {
-          // Full rollback
           const result = this.rollback.fullRollback(cpIndex);
           if (result.restored) {
             this.conversation.messages = result.messages;
-            printSuccess(
-              `完整回滚成功！对话已恢复到检查点 ${cpIndex + 1}。` +
-                (result.fileRestored
-                  ? " 文件更改已还原。"
-                  : " (文件未能还原，请手动检查)")
-            );
-          } else {
-            printError("回滚失败。");
-          }
+            printSuccess(`Full rollback to checkpoint ${cpIndex + 1}.`);
+          } else printError("Rollback failed.");
         } else if (option === 1) {
-          // Context-only rollback
           const result = this.rollback.contextRollback(cpIndex);
           if (result.restored) {
             this.conversation.messages = result.messages;
-            printSuccess(
-              `上下文已恢复到检查点 ${cpIndex + 1}。文件保持不变。`
-            );
-          } else {
-            printError("上下文恢复失败。");
-          }
+            printSuccess(`Context restored to checkpoint ${cpIndex + 1}.`);
+          } else printError("Context restore failed.");
         }
-        // option === 2 is cancel, do nothing
       };
 
       const cleanup = () => {
         process.stdin.removeListener("keypress", onKey);
         this._inRollbackMode = false;
-        // Restore normal screen
-        process.stdout.write("\x1b[2J\x1b[H"); // clear screen
-        printInfo("已退出撤回模式。");
+        process.stdout.write("\x1b[2J\x1b[H");
+        printInfo("Exited rollback mode.");
         this._rl.prompt();
         resolve();
       };
@@ -433,67 +561,85 @@ export class MercuryRepl {
       case "/clear":
         this.conversation.clear();
         await this.log.clear();
-        printInfo("对话已清除。");
+        printInfo("Conversation cleared.");
         break;
 
       case "/config":
-        printInfo("当前配置:");
+        printInfo("Current config:");
         console.log(JSON.stringify(this.client.config, null, 2));
         break;
 
       case "/reasoning": {
         const level = parts[1]?.toLowerCase();
         if (!level) {
-          printInfo(`当前推理深度: ${this.client.config.reasoning_effort}`);
-          printInfo(`可用级别: ${REASONING_LEVELS.join(", ")}`);
+          printInfo(`Reasoning: ${this.client.config.reasoning_effort}`);
           break;
         }
         if (!REASONING_LEVELS.includes(level)) {
-          printError(`无效级别 "${level}"。可选: ${REASONING_LEVELS.join(", ")}`);
+          printError(`Invalid. Options: ${REASONING_LEVELS.join(", ")}`);
           break;
         }
         this.client.config.reasoning_effort = level;
-        printSuccess(`推理深度已设置为: ${level}`);
+        printSuccess(`Reasoning: ${level}`);
         break;
       }
 
       case "/supercompress":
         this.superCompress = !this.superCompress;
-        if (this.superCompress) {
-          printInfo(
-            "超级压缩: ON — 在 25% 容量时触发极致压缩。" +
-              "完整对话记录保存在 .mercury/conversation.jsonl"
-          );
-        } else {
-          printInfo("超级压缩: OFF — 使用普通压缩 (60% 阈值)。");
-        }
+        printInfo(`Super compress: ${this.superCompress ? "ON" : "OFF"}`);
         break;
 
       case "/contextsearch":
         this.contextSearchEnabled = !this.contextSearchEnabled;
-        if (this.contextSearchEnabled) {
-          printInfo(
-            "上下文搜索: ON — 模型现在可以使用 ContextSearch 工具在完整对话日志中搜索历史内容。" +
-              "注意：此工具会消耗较多 token。"
-          );
-        } else {
-          printInfo("上下文搜索: OFF — ContextSearch 工具已禁用。模型仍可用 Read 直接读取 .mercury/conversation.jsonl。");
-        }
+        printInfo(`Context search: ${this.contextSearchEnabled ? "ON" : "OFF"}`);
         break;
+
+      case "/trust": {
+        const mode = parts[1]?.toLowerCase();
+        if (!mode) {
+          printInfo(`Trust: ${this._trustLabel(this.trustMode)}`);
+          printInfo(`Outside workspace: ${this.allowOutsideWorkspace ? "allowed" : "blocked"}`);
+          printInfo("Usage: /trust readonly|approval|open|outside");
+          break;
+        }
+        if (mode === "readonly" || mode === "1") this.trustMode = TRUST_READONLY;
+        else if (mode === "approval" || mode === "2") this.trustMode = TRUST_APPROVAL;
+        else if (mode === "open" || mode === "3") this.trustMode = TRUST_OPEN;
+        else if (mode === "outside") {
+          this.allowOutsideWorkspace = !this.allowOutsideWorkspace;
+          printInfo(`Outside workspace: ${this.allowOutsideWorkspace ? "allowed" : "blocked"}`);
+          break;
+        } else {
+          printError(`Unknown mode: ${mode}`);
+          break;
+        }
+        printSuccess(`Trust: ${this._trustLabel(this.trustMode)}`);
+        break;
+      }
+
+      case "/workspace": {
+        const newWs = parts.slice(1).join(" ").trim();
+        if (!newWs) {
+          printInfo(`Workspace: ${this.workspace}`);
+          break;
+        }
+        this.workspace = path.resolve(newWs);
+        this.memory = new MemoryManager(this.workspace);
+        this.log = new ConversationLog(this.workspace);
+        this.rollback = new RollbackManager(this.workspace);
+        printSuccess(`Workspace: ${this.workspace}`);
+        break;
+      }
 
       case "/history":
         await this._handleHistory(parts.slice(1));
         break;
 
       case "/context":
-        printInfo(`上下文使用: ${this.conversation.getUsagePercent()}`);
-        printInfo(`消息数量: ${this.conversation.messages.length}`);
-        printInfo(`检查点数: ${this.rollback.count}`);
-        printInfo(`记忆文件: ${this.memory.filePath}`);
-        printInfo(`对话日志: ${this.log.filePath}`);
-        printInfo(`超级压缩: ${this.superCompress ? "ON" : "OFF"}`);
-        printInfo(`上下文搜索: ${this.contextSearchEnabled ? "ON" : "OFF"}`);
-        printInfo(`会话 ID: ${this._sessionId}`);
+        printInfo(`Context: ${this.conversation.getUsagePercent()}`);
+        printInfo(`Messages: ${this.conversation.messages.length}`);
+        printInfo(`Checkpoints: ${this.rollback.count}`);
+        printInfo(`Session: ${this._sessionId}`);
         break;
 
       case "/settings":
@@ -505,183 +651,121 @@ export class MercuryRepl {
         break;
 
       default:
-        printError(`未知命令: ${cmd}。输入 /help 查看可用命令。`);
+        printError(`Unknown command: ${cmd}. Type /help for commands.`);
     }
   }
 
-  // ── History sub-commands ──────────────────────────────────────────────────
+  // ── History ──────────────────────────────────────────────────────────────
 
   async _handleHistory(args) {
     const subCmd = args[0]?.toLowerCase();
-
     if (!subCmd || subCmd === "list") {
-      // List all sessions
       const sessions = await this.history.list();
       printSessionList(sessions);
       return;
     }
-
     if (subCmd === "save") {
       const filepath = await this.history.save({
         id: this._sessionId,
-        cwd: process.cwd(),
+        cwd: this.workspace,
         messages: this.conversation.getMessages(),
         config: this.client.config,
       });
-      printSuccess(`会话已保存: ${filepath}`);
+      printSuccess(`Saved: ${filepath}`);
       return;
     }
-
     if (subCmd === "restore") {
       const id = args[1];
-      if (!id) {
-        printError("请指定会话编号。用法: /history restore <编号>");
-        return;
-      }
+      if (!id) { printError("Usage: /history restore <number>"); return; }
       const session = await this.history.load(id);
-      if (!session) {
-        printError(`找不到会话: ${id}`);
-        return;
-      }
+      if (!session) { printError(`Not found: ${id}`); return; }
       this.conversation.messages = session.messages;
       this._sessionId = session.id;
-      printSuccess(
-        `已恢复会话 (${session.messageCount} 条消息, ${new Date(session.timestamp).toLocaleString()})`
-      );
+      printSuccess(`Restored (${session.messageCount} messages)`);
       return;
     }
-
-    printError(`未知的 history 子命令: ${subCmd}。可用: list, save, restore`);
+    printError(`Unknown: ${subCmd}. Options: list, save, restore`);
   }
 
-  // ── Settings ───────────────────────────────────────────────────────────────
+  // ── Settings ──────────────────────────────────────────────────────────────
 
   async _handleSettings(args) {
     const subCmd = args[0]?.toLowerCase();
-
     if (!subCmd) {
-      // Show all current settings
+      const G = "\x1b[90m", R = "\x1b[0m", C = "\x1b[38;5;87m", B = "\x1b[1m";
+      const GR = "\x1b[32m", D = "\x1b[2m";
       console.log("");
-      console.log(`\x1b[1m\x1b[38;5;87m  ╭─ 设置 (Settings) ─────────────────────────────────────╮\x1b[0m`);
-      console.log(`\x1b[90m  │\x1b[0m  \x1b[32mmodel          \x1b[0m \x1b[2m${this.client.config.model}\x1b[0m`);
-      console.log(`\x1b[90m  │\x1b[0m  \x1b[32mreasoning      \x1b[0m \x1b[2m${this.client.config.reasoning_effort}\x1b[0m`);
-      console.log(`\x1b[90m  │\x1b[0m  \x1b[32mtemperature    \x1b[0m \x1b[2m${this.client.config.temperature}\x1b[0m`);
-      console.log(`\x1b[90m  │\x1b[0m  \x1b[32mmax_tokens     \x1b[0m \x1b[2m${this.client.config.max_tokens}\x1b[0m`);
-      console.log(`\x1b[90m  │\x1b[0m  \x1b[32mstream         \x1b[0m \x1b[2m${this.client.config.stream}\x1b[0m`);
-      console.log(`\x1b[90m  │\x1b[0m  \x1b[32mdiffusing      \x1b[0m \x1b[2m${this.client.config.diffusing}\x1b[0m`);
-      console.log(`\x1b[90m  │\x1b[0m  \x1b[32mapi_base       \x1b[0m \x1b[2m${this.client.baseURL}\x1b[0m`);
-      console.log(`\x1b[90m  │\x1b[0m  \x1b[32mapi_key        \x1b[0m \x1b[2m${this.client.apiKey ? this.client.apiKey.slice(0, 8) + "..." + this.client.apiKey.slice(-4) : "(not set)"}\x1b[0m`);
-      console.log(`\x1b[90m  │\x1b[0m  \x1b[32msupercompress  \x1b[0m \x1b[2m${this.superCompress ? "ON" : "OFF"}\x1b[0m`);
-      console.log(`\x1b[90m  │\x1b[0m  \x1b[32mcontextsearch  \x1b[0m \x1b[2m${this.contextSearchEnabled ? "ON" : "OFF"}\x1b[0m`);
-      console.log(`\x1b[1m\x1b[38;5;87m  ╰──────────────────────────────────────────────────────╯\x1b[0m`);
+      console.log(`${B}${C}  \u256d\u2500 Settings \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256e${R}`);
+      const rows = [
+        ["model", this.client.config.model],
+        ["reasoning", this.client.config.reasoning_effort],
+        ["temperature", this.client.config.temperature],
+        ["max_tokens", this.client.config.max_tokens],
+        ["stream", this.client.config.stream],
+        ["diffusing", this.client.config.diffusing],
+        ["api_base", this.client.baseURL],
+        ["api_key", this.client.apiKey ? this.client.apiKey.slice(0, 8) + "..." + this.client.apiKey.slice(-4) : "(not set)"],
+        ["workspace", this.workspace],
+        ["trust", this.trustMode],
+        ["supercompress", this.superCompress ? "ON" : "OFF"],
+        ["contextsearch", this.contextSearchEnabled ? "ON" : "OFF"],
+      ];
+      for (const [k, v] of rows) {
+        console.log(`${G}  \u2502${R}  ${GR}${k.padEnd(15)}${R} ${D}${v}${R}`);
+      }
+      console.log(`${B}${C}  \u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256f${R}`);
       console.log("");
-      printInfo("用法: /settings <key> <value>");
-      printInfo("示例: /settings temperature 0.8");
-      printInfo("      /settings api_key sk_xxxx...");
-      printInfo("      /settings reasoning high");
+      printInfo("Usage: /settings <key> <value>");
       console.log("");
       return;
     }
 
     const value = args.slice(1).join(" ");
-    if (!value) {
-      printError(`请提供值。用法: /settings ${subCmd} <value>`);
-      return;
-    }
+    if (!value) { printError(`Usage: /settings ${subCmd} <value>`); return; }
 
     switch (subCmd) {
-      case "model":
-        this.client.config.model = value;
-        printSuccess(`model 已设为: ${value}`);
-        break;
-
+      case "model": this.client.config.model = value; break;
       case "reasoning":
-        if (!REASONING_LEVELS.includes(value)) {
-          printError(`无效级别 "${value}"。可选: ${REASONING_LEVELS.join(", ")}`);
-          return;
-        }
-        this.client.config.reasoning_effort = value;
-        printSuccess(`reasoning 已设为: ${value}`);
-        break;
-
+        if (!REASONING_LEVELS.includes(value)) { printError(`Invalid. Options: ${REASONING_LEVELS.join(", ")}`); return; }
+        this.client.config.reasoning_effort = value; break;
       case "temperature": {
-        const temp = parseFloat(value);
-        if (isNaN(temp) || temp < 0 || temp > 2) {
-          printError("temperature 必须是 0-2 之间的数字。");
-          return;
-        }
-        this.client.config.temperature = temp;
-        printSuccess(`temperature 已设为: ${temp}`);
-        break;
+        const t = parseFloat(value);
+        if (isNaN(t) || t < 0 || t > 2) { printError("Must be 0-2."); return; }
+        this.client.config.temperature = t; break;
       }
-
       case "max_tokens": {
-        const tokens = parseInt(value, 10);
-        if (isNaN(tokens) || tokens < 1 || tokens > 50000) {
-          printError("max_tokens 必须是 1-50000 之间的整数。");
-          return;
-        }
-        this.client.config.max_tokens = tokens;
-        printSuccess(`max_tokens 已设为: ${tokens}`);
-        break;
+        const n = parseInt(value, 10);
+        if (isNaN(n) || n < 1 || n > 50000) { printError("Must be 1-50000."); return; }
+        this.client.config.max_tokens = n; break;
       }
-
-      case "stream":
-        this.client.config.stream = value === "true" || value === "on";
-        printSuccess(`stream 已设为: ${this.client.config.stream}`);
-        break;
-
-      case "diffusing":
-        this.client.config.diffusing = value === "true" || value === "on";
-        printSuccess(`diffusing 已设为: ${this.client.config.diffusing}`);
-        break;
-
-      case "api_base":
-        this.client.baseURL = value;
-        printSuccess(`api_base 已设为: ${value}`);
-        break;
-
-      case "api_key":
-        this.client.apiKey = value;
-        printSuccess(`api_key 已更新: ${value.slice(0, 8)}...${value.slice(-4)}`);
-        break;
-
-      case "supercompress":
-        this.superCompress = value === "true" || value === "on";
-        printSuccess(`supercompress 已设为: ${this.superCompress ? "ON" : "OFF"}`);
-        break;
-
-      case "contextsearch":
-        this.contextSearchEnabled = value === "true" || value === "on";
-        printSuccess(`contextsearch 已设为: ${this.contextSearchEnabled ? "ON" : "OFF"}`);
-        break;
-
+      case "stream": this.client.config.stream = value === "true" || value === "on"; break;
+      case "diffusing": this.client.config.diffusing = value === "true" || value === "on"; break;
+      case "api_base": this.client.baseURL = value; break;
+      case "api_key": this.client.apiKey = value; break;
+      case "supercompress": this.superCompress = value === "true" || value === "on"; break;
+      case "contextsearch": this.contextSearchEnabled = value === "true" || value === "on"; break;
       default:
-        printError(
-          `未知设置项: ${subCmd}。可用: model, reasoning, temperature, max_tokens, ` +
-          `stream, diffusing, api_base, api_key, supercompress, contextsearch`
-        );
+        printError(`Unknown setting: ${subCmd}`);
+        return;
     }
+    printSuccess(`${subCmd} updated.`);
   }
 
   // ── Graceful exit ─────────────────────────────────────────────────────────
 
   async _gracefulExit() {
-    // Auto-save session on exit if there are messages
-    if (this.conversation.messages.length > 1) {
+    if (this.conversation && this.conversation.messages.length > 1) {
       try {
         await this.history.save({
           id: this._sessionId,
-          cwd: process.cwd(),
+          cwd: this.workspace,
           messages: this.conversation.getMessages(),
           config: this.client.config,
         });
-        printInfo("会话已自动保存。");
-      } catch {
-        // non-critical
-      }
+        printInfo("Session auto-saved.");
+      } catch { /* non-critical */ }
     }
-    printInfo("再见！");
+    printInfo("Goodbye!");
     process.exit(0);
   }
 
@@ -692,18 +776,17 @@ export class MercuryRepl {
     let reasoning = "";
     const toolCallMap = {};
     let usage = null;
+    let finish_reason = null;
 
     for (const chunk of chunks) {
       if (chunk.usage) usage = chunk.usage;
-
       const choice = chunk.choices?.[0];
       if (!choice) continue;
+      if (choice.finish_reason) finish_reason = choice.finish_reason;
       const delta = choice.delta;
       if (!delta) continue;
 
       if (delta.content) content += delta.content;
-
-      // Collect reasoning/thinking content (Mercury-2 chain-of-thought)
       if (delta.reasoning_content) reasoning += delta.reasoning_content;
       if (delta.reasoning) reasoning += delta.reasoning;
 
@@ -714,28 +797,19 @@ export class MercuryRepl {
             toolCallMap[idx] = {
               id: tc.id || "",
               type: tc.type || "function",
-              function: {
-                name: tc.function?.name || "",
-                arguments: tc.function?.arguments || "",
-              },
+              function: { name: tc.function?.name || "", arguments: tc.function?.arguments || "" },
             };
           } else {
             if (tc.id) toolCallMap[idx].id = tc.id;
-            if (tc.function?.name)
-              toolCallMap[idx].function.name = tc.function.name;
-            if (tc.function?.arguments)
-              toolCallMap[idx].function.arguments += tc.function.arguments;
+            if (tc.function?.name) toolCallMap[idx].function.name = tc.function.name;
+            if (tc.function?.arguments) toolCallMap[idx].function.arguments += tc.function.arguments;
           }
         }
       }
     }
 
-    const indices = Object.keys(toolCallMap)
-      .map(Number)
-      .sort((a, b) => a - b);
-    const tool_calls =
-      indices.length > 0 ? indices.map((i) => toolCallMap[i]) : null;
-
-    return { content: content || null, reasoning: reasoning || null, tool_calls, usage };
+    const indices = Object.keys(toolCallMap).map(Number).sort((a, b) => a - b);
+    const tool_calls = indices.length > 0 ? indices.map((i) => toolCallMap[i]) : null;
+    return { content: content || null, reasoning: reasoning || null, tool_calls, usage, finish_reason };
   }
 }

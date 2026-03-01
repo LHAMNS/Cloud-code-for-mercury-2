@@ -5,6 +5,7 @@ import https from 'node:https';
 import path from 'node:path';
 import { SubAgent, runSubAgentTeam } from '../subagent.js';
 import { MercuryClient } from '../client.js';
+import { AgentPanelManager } from '../ui/display.js';
 
 // ── Read tool token limit ────────────────────────────────────────────────────
 // ~35,000 tokens at ~3.5 chars/token = 122,500 chars
@@ -841,7 +842,26 @@ export class ToolExecutor {
       return 'Error: Maximum 5 sub-agents allowed per team.';
     }
 
-    const results = await runSubAgentTeam(tasks, this._clientOptions);
+    // Create panel manager for live display
+    const panels = new AgentPanelManager(tasks.length);
+    panels.init(tasks);
+
+    let results;
+    try {
+      results = await runSubAgentTeam(tasks, {
+        ...this._clientOptions,
+        onAgentProgress: (agentIndex, event, detail) => {
+          if (event === 'done' || event === 'error') {
+            panels.finish(agentIndex, event === 'done', detail);
+          } else {
+            panels.update(agentIndex, event, detail);
+          }
+        },
+      });
+    } finally {
+      // Always clean up panels
+      panels.cleanup();
+    }
 
     // Format results
     const formatted = results.map((result, i) => {

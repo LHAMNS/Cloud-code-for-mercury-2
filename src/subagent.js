@@ -14,27 +14,25 @@ import { MODEL_LIMITS } from "./config.js";
 const MAX_SUB_TURNS = 30;
 // Maximum concurrent sub-agents
 const MAX_CONCURRENT = 5;
-// Sub-agents cannot spawn further sub-agents or use expensive ContextSearch — filter these out
+// Sub-agents cannot spawn further sub-agents or use expensive ContextSearch
 const SUB_AGENT_TOOLS = TOOL_DEFINITIONS.filter(
   (t) => !["SubAgent", "SubAgentTeam", "ContextSearch"].includes(t.function.name)
 );
-// Compress sub-agent context at 70% capacity (same Codex approach as main agent)
-const SUB_AGENT_COMPRESS_THRESHOLD = 0.70;
 
 // Track running sub-agents globally for concurrency control
 let runningCount = 0;
 
 /**
  * SubAgent: an isolated agent with its own conversation context.
- * It can call core tools (Read, Write, Edit, Bash, Glob, Grep) but NOT
- * SubAgent/SubAgentTeam to prevent infinite recursion.
+ * Supports progress callbacks for live panel display.
  */
 export class SubAgent {
   /**
    * @param {object} options
    * @param {string} options.task - Description of what this sub-agent should do
-   * @param {string} [options.apiKey] - API key (defaults to env var)
-   * @param {string} [options.baseURL] - API base URL (defaults to config)
+   * @param {string} [options.apiKey] - API key
+   * @param {string} [options.baseURL] - API base URL
+   * @param {Function} [options.onProgress] - Callback: (event, detail) => void
    */
   constructor(options = {}) {
     this.task = options.task || "";
@@ -42,23 +40,31 @@ export class SubAgent {
       apiKey: options.apiKey,
       baseURL: options.baseURL,
     });
-    // Pass credentials down so sub-agent tools work correctly
     this.toolExecutor = new ToolExecutor({
       apiKey: options.apiKey,
       baseURL: options.baseURL,
     });
     this.messages = [];
     this._turnCount = 0;
+    this._onProgress = options.onProgress || null;
+  }
+
+  /**
+   * Emit a progress event.
+   */
+  _emit(event, detail) {
+    if (this._onProgress) {
+      try { this._onProgress(event, detail); } catch { /* non-critical */ }
+    }
   }
 
   /**
    * Run the sub-agent to completion.
-   * Returns the final text response from the model.
    * @returns {Promise<string>} The sub-agent's final response
    */
   async run() {
     if (runningCount >= MAX_CONCURRENT) {
-      return `Error: Maximum concurrent sub-agents (${MAX_CONCURRENT}) reached. Wait for existing sub-agents to finish.`;
+      return `Error: Maximum concurrent sub-agents (${MAX_CONCURRENT}) reached.`;
     }
 
     runningCount++;
@@ -70,7 +76,6 @@ export class SubAgent {
   }
 
   async _execute() {
-    // Build system prompt for the sub-agent (stored separately, like main agent)
     this._systemPrompt =
       buildSystemPrompt(process.cwd()) +
       `\n## Sub-Agent Context\n\nYou are a sub-agent spawned by the main agent to handle a specific task. ` +
@@ -78,31 +83,33 @@ export class SubAgent {
       `Return only the relevant findings or results — the main agent will use your output to continue its work.\n` +
       `Note: You have access to core tools (Read, Write, Edit, Bash, Glob, Grep) but cannot spawn further sub-agents.\n`;
 
-    // Messages array WITHOUT system prompt (same pattern as main Conversation)
     this.messages = [
       { role: "user", content: this.task },
     ];
 
-    // Run the agentic loop
+    this._emit("thinking", "Starting...");
+
     while (this._turnCount < MAX_SUB_TURNS) {
       this._turnCount++;
 
-      // Codex-style context compression (same approach as main agent)
+      // Codex-style context compression
       try {
-        await compressContext(
-          this.messages,       // Modified in-place
-          this._systemPrompt,  // For token estimation
-          this.client,         // Mercury-2 for summarization
-          null,                // No memory manager for sub-agents
-          () => {},            // Silent (no UI)
+        const compressed = await compressContext(
+          this.messages,
+          this._systemPrompt,
+          this.client,
+          null,
+          () => {},
         );
+        if (compressed) this._emit("compressing", "Context compressed");
       } catch {
-        // Non-critical: continue even if compression fails
+        // Non-critical
       }
+
+      this._emit("thinking", `Turn ${this._turnCount}...`);
 
       let response;
       try {
-        // Prepend system prompt for API call (same as Conversation.getMessages())
         const apiMessages = [
           { role: "system", content: this._systemPrompt },
           ...this.messages,
@@ -113,26 +120,25 @@ export class SubAgent {
           reasoning_effort: "low",
         });
       } catch (err) {
+        this._emit("error", err.message);
         return `Sub-agent API error: ${err.message}`;
       }
 
       const choice = response.choices?.[0];
       if (!choice) {
+        this._emit("error", "Empty response");
         return "Sub-agent received empty response from API.";
       }
 
       const message = choice.message;
 
-      // If the model returns tool calls, execute them and continue
       if (message.tool_calls && message.tool_calls.length > 0) {
-        // Add the assistant message with tool calls
         this.messages.push({
           role: "assistant",
           content: message.content || null,
           tool_calls: message.tool_calls,
         });
 
-        // Execute each tool call
         for (const tc of message.tool_calls) {
           const fnName = tc.function.name;
           let args;
@@ -142,10 +148,17 @@ export class SubAgent {
             args = {};
           }
 
+          // Emit tool call event with formatted detail
+          const toolDetail = _formatToolDetail(fnName, args);
+          this._emit("tool_call", `${fnName} ${toolDetail}`);
+
           const result = await this.toolExecutor.execute(
             fnName.toLowerCase(),
             args
           );
+
+          this._emit("tool_result", `${fnName} done`);
+
           this.messages.push({
             role: "tool",
             tool_call_id: tc.id,
@@ -153,11 +166,11 @@ export class SubAgent {
           });
         }
 
-        // Continue the loop for next model turn
         continue;
       }
 
-      // No tool calls — this is the final response
+      // Final response
+      this._emit("done", message.content || "");
       return message.content || "(sub-agent returned empty response)";
     }
 
@@ -165,6 +178,7 @@ export class SubAgent {
     const lastAssistant = [...this.messages]
       .reverse()
       .find((m) => m.role === "assistant" && m.content);
+    this._emit("done", lastAssistant?.content || "max turns reached");
     return (
       lastAssistant?.content ||
       "(sub-agent reached maximum turns without a final response)"
@@ -173,18 +187,46 @@ export class SubAgent {
 }
 
 /**
- * Run multiple sub-agents concurrently.
+ * Format a tool call detail for display in the panel.
+ */
+function _formatToolDetail(name, args) {
+  switch (name) {
+    case "Read": return args.file_path ? `→ ${_trunc(args.file_path, 40)}` : "";
+    case "Write": return args.file_path ? `→ ${_trunc(args.file_path, 40)}` : "";
+    case "Edit": return args.file_path ? `→ ${_trunc(args.file_path, 40)}` : "";
+    case "Bash": return args.command ? `$ ${_trunc(args.command, 40)}` : "";
+    case "Glob": return args.pattern ? _trunc(args.pattern, 40) : "";
+    case "Grep": return args.pattern ? `/${_trunc(args.pattern, 30)}/` : "";
+    case "ListDir": return _trunc(args.path || ".", 40);
+    default: return "";
+  }
+}
+
+function _trunc(s, max) {
+  if (!s) return "";
+  return s.length <= max ? s : s.slice(0, max - 3) + "...";
+}
+
+/**
+ * Run multiple sub-agents concurrently with optional progress reporting.
  * @param {Array<{task: string}>} tasks - Array of task descriptions
- * @param {object} [options] - Shared options (apiKey, baseURL)
+ * @param {object} [options] - Shared options (apiKey, baseURL, onAgentProgress)
  * @returns {Promise<string[]>} Array of results from each sub-agent
  */
 export async function runSubAgentTeam(tasks, options = {}) {
+  const { onAgentProgress, ...restOptions } = options;
+
   const agents = tasks.map(
-    (t) =>
-      new SubAgent({ task: typeof t === "string" ? t : t.task, ...options })
+    (t, i) =>
+      new SubAgent({
+        task: typeof t === "string" ? t : t.task,
+        ...restOptions,
+        onProgress: onAgentProgress
+          ? (event, detail) => onAgentProgress(i, event, detail)
+          : null,
+      })
   );
 
-  // Run all agents concurrently
   const results = await Promise.allSettled(agents.map((a) => a.run()));
 
   return results.map((r, i) => {

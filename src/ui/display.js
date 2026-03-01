@@ -1,5 +1,5 @@
 // Mercury Code - Terminal Display Module
-// Beautiful ANSI-styled terminal UI with 256-color support
+// Codex-style terminal UI with agent panel system
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -36,6 +36,11 @@ const bg256 = (n) => `${ESC}48;5;${n}m`;
 // Mercury brand gradient colors (teal → cyan → white)
 const BRAND = [fg256(30), fg256(37), fg256(44), fg256(51), fg256(87), fg256(123)];
 
+// Terminal width helper
+function getTermWidth() {
+  return process.stdout.columns || 80;
+}
+
 // ── ASCII Art Logo ───────────────────────────────────────────────────────────
 
 const MERCURY_LOGO = [
@@ -50,9 +55,12 @@ const MERCURY_LOGO = [
 // ── Display Functions ────────────────────────────────────────────────────────
 
 /**
- * Print the beautiful welcome banner with gradient ASCII art.
+ * Print the welcome banner with gradient ASCII art.
  */
 export function printWelcome() {
+  const w = getTermWidth();
+  const sep = "─".repeat(Math.min(w - 4, 68));
+
   console.log("");
 
   // Print logo with gradient coloring
@@ -62,18 +70,14 @@ export function printWelcome() {
   }
 
   console.log("");
-  console.log(
-    `${GRAY}  ─────────────────────────────────────────────────────────────────${RESET}`
-  );
+  console.log(`${GRAY}  ${sep}${RESET}`);
   console.log(
     `${BOLD}${fg256(87)}  Mercury Code${RESET} ${DIM}v${PKG_VERSION}${RESET}  ${GRAY}│${RESET}  ${DIM}Powered by Mercury-2 Diffusion Model${RESET}`
   );
   console.log(
     `${DIM}  Inception Labs${RESET}         ${GRAY}│${RESET}  ${DIM}Type /help for commands, /exit to quit${RESET}`
   );
-  console.log(
-    `${GRAY}  ─────────────────────────────────────────────────────────────────${RESET}`
-  );
+  console.log(`${GRAY}  ${sep}${RESET}`);
   console.log("");
 }
 
@@ -81,23 +85,22 @@ export function printWelcome() {
  * Print available commands in a styled table.
  */
 export function printHelp() {
-  const SEP = `${GRAY}│${RESET}`;
   console.log("");
   console.log(`${BOLD}${fg256(87)}  ╭─ Commands ─────────────────────────────────────────╮${RESET}`);
 
   const cmds = [
-    ["/help", "显示帮助信息"],
-    ["/clear", "清除对话历史"],
-    ["/reasoning <level>", "设置推理深度 (instant/low/medium/high)"],
-    ["/supercompress", "切换超级压缩模式 (on/off)"],
-    ["/contextsearch", "切换上下文搜索工具 (默认关闭，消耗token)"],
-    ["/history", "查看/恢复历史会话"],
-    ["/history save", "保存当前会话"],
-    ["/history restore <n>", "恢复第 n 个会话"],
-    ["/context", "查看上下文使用情况"],
-    ["/settings", "查看/修改设置 (API密钥、模型参数等)"],
-    ["/config", "显示当前配置 (只读)"],
-    ["/exit", "退出 Mercury Code"],
+    ["/help", "Show this help"],
+    ["/clear", "Clear conversation"],
+    ["/trust <mode>", "Set trust: readonly | approval | open | outside"],
+    ["/workspace <path>", "View/change workspace directory"],
+    ["/reasoning <level>", "Set reasoning: instant | low | medium | high"],
+    ["/supercompress", "Toggle super compression (on/off)"],
+    ["/contextsearch", "Toggle context search tool (off by default)"],
+    ["/history [save|restore]", "Session history management"],
+    ["/context", "View context usage stats"],
+    ["/settings [key value]", "View/modify settings (API key, model, etc.)"],
+    ["/config", "Show raw config (read-only)"],
+    ["/exit", "Exit Mercury Code"],
   ];
 
   for (const [cmd, desc] of cmds) {
@@ -107,16 +110,42 @@ export function printHelp() {
 
   console.log(`${BOLD}${fg256(87)}  ╰──────────────────────────────────────────────────╯${RESET}`);
   console.log("");
-  console.log(`  ${DIM}快捷键: ${YELLOW}ESC×3${RESET} ${DIM}进入撤回模式 (回滚到之前的任意时间点)${RESET}`);
-  console.log(`  ${DIM}        ${YELLOW}Ctrl+C${RESET} ${DIM}中断当前操作${RESET}`);
+  console.log(`  ${DIM}Shortcuts: ${YELLOW}ESC\u00d73${RESET} ${DIM}rollback mode  ${YELLOW}Ctrl+C${RESET} ${DIM}interrupt${RESET}`);
   console.log("");
 }
 
+// ── Response Framing (Codex-style) ──────────────────────────────────────────
+
 /**
- * Print a tool call notification with styled formatting.
+ * Print a header before assistant response starts streaming.
+ */
+export function printResponseHeader() {
+  console.log("");
+  console.log(`${fg256(75)}  ┌─ ${BOLD}Mercury${RESET}${fg256(75)} ${"─".repeat(Math.min(getTermWidth() - 16, 60))}${RESET}`);
+  console.log(`${fg256(75)}  │${RESET}`);
+}
+
+/**
+ * Print a footer after assistant response finishes.
+ */
+export function printResponseFooter() {
+  console.log(`${fg256(75)}  │${RESET}`);
+  console.log(`${fg256(75)}  └${"─".repeat(Math.min(getTermWidth() - 4, 68))}${RESET}`);
+}
+
+/**
+ * Print a turn separator between conversation turns.
+ */
+export function printTurnSeparator() {
+  console.log("");
+}
+
+// ── Tool Call Display (Codex-style) ─────────────────────────────────────────
+
+/**
+ * Print a tool call notification with Codex-style formatting.
  */
 export function printToolCall(name, args) {
-  // Tool icon based on type
   const icons = {
     Read: "📖", Write: "📝", Edit: "✏️ ", Patch: "🔨", Bash: "⚡",
     Glob: "🔍", Grep: "🔎", ListDir: "📂", Diff: "📊", Fetch: "🌐",
@@ -124,14 +153,11 @@ export function printToolCall(name, args) {
   };
   const icon = icons[name] || "🔧";
 
-  console.log("");
-  console.log(`${fg256(214)}${BOLD}  ${icon} ${name}${RESET}`);
-
-  // Show key args in a compact format
   const summary = _formatToolArgs(name, args);
-  if (summary) {
-    console.log(`${GRAY}     ${summary}${RESET}`);
-  }
+  const detail = summary ? ` ${DIM}${summary}${RESET}` : "";
+
+  console.log(`${fg256(75)}  │${RESET}`);
+  console.log(`${fg256(75)}  ├─${RESET} ${fg256(214)}${icon} ${BOLD}${name}${RESET}${detail}`);
 }
 
 /**
@@ -145,7 +171,7 @@ function _formatToolArgs(name, args) {
       return args.file_path ? `→ ${basename(args.file_path)}` : "";
     case "Bash":
       return args.command
-        ? `$ ${args.command.length > 80 ? args.command.slice(0, 80) + "..." : args.command}`
+        ? `$ ${args.command.length > 70 ? args.command.slice(0, 70) + "..." : args.command}`
         : "";
     case "Glob":
       return args.pattern ? `pattern: ${args.pattern}` : "";
@@ -167,15 +193,17 @@ function _formatToolArgs(name, args) {
         : "";
     case "SubAgent":
       return args.task
-        ? args.task.length > 60 ? args.task.slice(0, 60) + "..." : args.task
+        ? args.task.length > 55 ? args.task.slice(0, 55) + "..." : args.task
         : "";
+    case "SubAgentTeam":
+      return args.tasks ? `${args.tasks.length} agent(s)` : "";
     default:
       return "";
   }
 }
 
 /**
- * Print tool result with truncation and styling.
+ * Print tool result with truncation and Codex-style indentation.
  */
 export function printToolResult(result, truncateAt = 600) {
   let output = String(result);
@@ -184,12 +212,10 @@ export function printToolResult(result, truncateAt = 600) {
       output.slice(0, truncateAt) +
       `\n${DIM}... (${result.length} chars total)${RESET}`;
   }
-  // Indent result lines slightly
   const lines = output.split("\n");
   for (const line of lines) {
-    console.log(`${GRAY}     ${line}${RESET}`);
+    console.log(`${fg256(75)}  │${RESET}  ${GRAY}${line}${RESET}`);
   }
-  console.log("");
 }
 
 /**
@@ -214,13 +240,12 @@ export function printSuccess(message) {
 }
 
 /**
- * Print token usage with a visual bar.
+ * Print token usage with a visual bar (compact Codex-style).
  */
 export function printTokenUsage(usage) {
   const { prompt_tokens = 0, completion_tokens = 0, total_tokens = 0 } =
     usage || {};
 
-  // Extract reasoning token breakdown if available
   const details = usage?.completion_tokens_details || {};
   const reasoningTokens = details.reasoning_tokens || 0;
 
@@ -236,14 +261,14 @@ export function printTokenUsage(usage) {
 
   let line =
     `${DIM}  tokens ${bar} ` +
-    `${fg256(75)}prompt:${prompt_tokens}${RESET} ` +
-    `${fg256(214)}completion:${completion_tokens}${RESET}`;
+    `${fg256(75)}in:${prompt_tokens}${RESET} ` +
+    `${fg256(214)}out:${completion_tokens}${RESET}`;
 
   if (reasoningTokens > 0) {
-    line += ` ${fg256(141)}reasoning:${reasoningTokens}${RESET}`;
+    line += ` ${fg256(141)}think:${reasoningTokens}${RESET}`;
   }
 
-  line += ` ${DIM}total:${total_tokens}${RESET}`;
+  line += ` ${DIM}Σ${total_tokens}${RESET}`;
   console.log(line);
 }
 
@@ -263,12 +288,9 @@ export function printStreamEnd() {
 
 /**
  * Print the rollback mode UI.
- * @param {Array<{index, date, userMessage}>} checkpoints
- * @param {number} selectedIndex - currently highlighted index
  */
 export function printRollbackUI(checkpoints, selectedIndex) {
-  // Clear screen and draw rollback interface
-  process.stdout.write(`${ESC}2J${ESC}H`); // clear screen
+  process.stdout.write(`${ESC}2J${ESC}H`);
 
   console.log("");
   console.log(`${BOLD}${fg256(214)}  ╭─ 撤回模式 (Rollback) ──────────────────────────────╮${RESET}`);
@@ -298,8 +320,6 @@ export function printRollbackUI(checkpoints, selectedIndex) {
 
 /**
  * Print rollback confirmation options.
- * @param {object} checkpoint - Selected checkpoint
- * @param {number} selectedOption - 0 = full, 1 = context-only, 2 = cancel
  */
 export function printRollbackConfirm(checkpoint, selectedOption) {
   process.stdout.write(`${ESC}2J${ESC}H`);
@@ -329,7 +349,6 @@ export function printRollbackConfirm(checkpoint, selectedOption) {
 
 /**
  * Print session history list.
- * @param {Array} sessions
  */
 export function printSessionList(sessions) {
   if (sessions.length === 0) {
@@ -360,23 +379,27 @@ export function printSessionList(sessions) {
   console.log("");
 }
 
-// ── Spinner ──────────────────────────────────────────────────────────────────
+// ── Spinner (with elapsed time) ──────────────────────────────────────────────
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 export const spinner = {
   _interval: null,
   _frameIndex: 0,
+  _startTime: 0,
 
   start(text = "Thinking...") {
     if (this._interval) return;
     this._frameIndex = 0;
+    this._startTime = Date.now();
     process.stdout.write("\x1b[?25l"); // hide cursor
     this._interval = setInterval(() => {
       const frame = SPINNER_FRAMES[this._frameIndex % SPINNER_FRAMES.length];
-      // Gradient spinner color
       const color = BRAND[this._frameIndex % BRAND.length];
-      process.stdout.write(`\r${color}${frame}${RESET} ${DIM}${text}${RESET}`);
+      const elapsed = ((Date.now() - this._startTime) / 1000).toFixed(1);
+      process.stdout.write(
+        `\r${fg256(75)}  │${RESET} ${color}${frame}${RESET} ${DIM}${text}${RESET} ${GRAY}${elapsed}s${RESET}\x1b[K`
+      );
       this._frameIndex++;
     }, 80);
   },
@@ -389,3 +412,209 @@ export const spinner = {
     process.stdout.write("\r\x1b[K\x1b[?25h");
   },
 };
+
+// ── Agent Panel Manager ─────────────────────────────────────────────────────
+// Shows live windows for each sub-agent during SubAgentTeam execution.
+// Each agent gets a bordered panel showing status and latest activity.
+
+const PANEL_SPINNER = ["◐", "◓", "◑", "◒"];
+
+export class AgentPanelManager {
+  constructor(count) {
+    this.panels = [];
+    this._spinnerFrame = 0;
+    this._interval = null;
+    this._drawn = false;
+
+    for (let i = 0; i < count; i++) {
+      this.panels.push({
+        task: "",
+        status: "waiting",    // waiting | thinking | tool | compress | done | error
+        statusText: "Initializing...",
+        lastTool: "",
+        done: false,
+        success: false,
+        turns: 0,
+        startTime: Date.now(),
+      });
+    }
+  }
+
+  /**
+   * Initialize panels with task descriptions and draw them.
+   */
+  init(tasks) {
+    for (let i = 0; i < this.panels.length && i < tasks.length; i++) {
+      const task = typeof tasks[i] === "string" ? tasks[i] : tasks[i].task;
+      this.panels[i].task = task;
+    }
+
+    process.stdout.write("\x1b[?25l"); // hide cursor
+    console.log("");
+    this._draw();
+    this._drawn = true;
+
+    // Animate spinner at 120ms interval
+    this._interval = setInterval(() => {
+      this._spinnerFrame++;
+      if (this._drawn) this._redraw();
+    }, 120);
+  }
+
+  /**
+   * Update a panel's status.
+   */
+  update(index, event, detail) {
+    if (index < 0 || index >= this.panels.length) return;
+    const panel = this.panels[index];
+    if (panel.done) return;
+
+    switch (event) {
+      case "thinking":
+        panel.status = "thinking";
+        panel.turns++;
+        panel.statusText = `Thinking... (Turn ${panel.turns})`;
+        break;
+      case "tool_call":
+        panel.status = "tool";
+        panel.statusText = detail || "Executing tool...";
+        panel.lastTool = detail || "";
+        break;
+      case "tool_result":
+        panel.statusText = detail || "Processing result...";
+        break;
+      case "compressing":
+        panel.status = "compress";
+        panel.statusText = "Compressing context...";
+        break;
+    }
+  }
+
+  /**
+   * Mark a panel as finished.
+   */
+  finish(index, success, summary) {
+    if (index < 0 || index >= this.panels.length) return;
+    const panel = this.panels[index];
+    panel.done = true;
+    panel.success = success;
+    const elapsed = ((Date.now() - panel.startTime) / 1000).toFixed(1);
+    if (success) {
+      const chars = summary ? summary.length : 0;
+      panel.statusText = `Done (${panel.turns} turns, ${elapsed}s)`;
+      panel.lastTool = chars > 0 ? `Result: ${chars} chars` : "";
+    } else {
+      panel.statusText = `Error (${elapsed}s)`;
+      panel.lastTool = summary ? summary.slice(0, 60) : "";
+    }
+  }
+
+  /**
+   * Clean up: stop animation, clear panel area from terminal.
+   */
+  cleanup() {
+    if (this._interval) {
+      clearInterval(this._interval);
+      this._interval = null;
+    }
+
+    if (this._drawn) {
+      const totalLines = this._getTotalLines();
+      // Move cursor up and clear each line
+      process.stdout.write(`\x1b[${totalLines}A`);
+      for (let i = 0; i < totalLines; i++) {
+        process.stdout.write("\x1b[2K\n");
+      }
+      // Move back up to where panels started
+      process.stdout.write(`\x1b[${totalLines}A`);
+      this._drawn = false;
+    }
+
+    process.stdout.write("\x1b[?25h"); // show cursor
+  }
+
+  // Lines per panel: top border + status + activity + bottom border = 4
+  _getTotalLines() {
+    return this.panels.length * 4;
+  }
+
+  _draw() {
+    const w = Math.min(getTermWidth() - 2, 76);
+    const output = [];
+
+    for (let i = 0; i < this.panels.length; i++) {
+      output.push(...this._renderPanel(i, w));
+    }
+
+    process.stdout.write(output.join("\n") + "\n");
+  }
+
+  _redraw() {
+    const totalLines = this._getTotalLines();
+    process.stdout.write(`\x1b[${totalLines}A`);
+    this._draw();
+  }
+
+  _renderPanel(index, width) {
+    const panel = this.panels[index];
+    const inner = width - 4; // borders + padding
+
+    // Determine colors
+    let borderColor, statusIcon;
+    if (panel.done) {
+      if (panel.success) {
+        borderColor = GREEN;
+        statusIcon = `${GREEN}${BOLD}✓${RESET}`;
+      } else {
+        borderColor = RED;
+        statusIcon = `${RED}${BOLD}✗${RESET}`;
+      }
+    } else {
+      borderColor = fg256(75);
+      const frame = PANEL_SPINNER[this._spinnerFrame % PANEL_SPINNER.length];
+      const color = BRAND[this._spinnerFrame % BRAND.length];
+      statusIcon = `${color}${BOLD}${frame}${RESET}`;
+    }
+
+    // Header line
+    const taskLabel =
+      panel.task.length > inner - 14
+        ? panel.task.slice(0, inner - 17) + "..."
+        : panel.task;
+    const headerContent = `Agent ${index + 1}: ${taskLabel}`;
+    const headerPad = Math.max(0, width - headerContent.length - 4);
+    const header =
+      `${borderColor}╭─ ${BOLD}${headerContent}${RESET}${borderColor} ${"─".repeat(headerPad)}╮${RESET}`;
+
+    // Status line
+    const statusText =
+      panel.statusText.length > inner - 2
+        ? panel.statusText.slice(0, inner - 5) + "..."
+        : panel.statusText;
+    // Calculate visible length (without ANSI codes) for padding
+    const statusPad = Math.max(0, inner - _visLen(statusText) - 2);
+    const status =
+      `${borderColor}│${RESET} ${statusIcon} ${statusText}${" ".repeat(statusPad)}${borderColor}│${RESET}`;
+
+    // Activity line
+    const actText = panel.lastTool
+      ? panel.lastTool.length > inner - 2
+        ? panel.lastTool.slice(0, inner - 5) + "..."
+        : panel.lastTool
+      : "";
+    const actPad = Math.max(0, inner - actText.length);
+    const activity =
+      `${borderColor}│${RESET}  ${DIM}${actText}${RESET}${" ".repeat(actPad)}${borderColor}│${RESET}`;
+
+    // Footer line
+    const footer = `${borderColor}╰${"─".repeat(width - 2)}╯${RESET}`;
+
+    return [header, status, activity, footer];
+  }
+}
+
+// Estimate visible string length (strip ANSI codes)
+function _visLen(str) {
+  // eslint-disable-next-line no-control-regex
+  return str.replace(/\x1b\[[0-9;]*m/g, "").length;
+}

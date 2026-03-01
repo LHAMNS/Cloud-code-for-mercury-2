@@ -65,9 +65,19 @@ export async function compressContext(
 
   if (usage < COMPRESS_THRESHOLD) return;
 
-  // Determine how many old messages to compress
-  const protectedCount = Math.min(PROTECTED_RECENT, messages.length);
-  const cutoff = messages.length - protectedCount;
+  // Determine how many old messages to compress.
+  // We protect PROTECTED_RECENT messages, but must avoid splitting
+  // tool_call / tool_result pairs at the boundary.
+  let protectedCount = Math.min(PROTECTED_RECENT, messages.length);
+  let cutoff = messages.length - protectedCount;
+
+  // Adjust cutoff so we don't split a tool_call/tool_result pair.
+  // If the first protected message is a tool result, walk backward to include
+  // its preceding assistant tool_call message.
+  while (cutoff > 0 && messages[cutoff]?.role === "tool") {
+    cutoff--;
+    protectedCount++;
+  }
 
   if (cutoff <= 1) return; // nothing meaningful to compress
 
@@ -213,18 +223,25 @@ function parseSummaryResponse(raw) {
   let summary = raw;
   let memory = null;
 
-  const memoryIdx = raw.indexOf("## MEMORY");
-  if (memoryIdx !== -1) {
-    const summaryIdx = raw.indexOf("## SUMMARY");
-    const summaryStart = summaryIdx !== -1 ? summaryIdx + "## SUMMARY".length : 0;
-    summary = raw.slice(summaryStart, memoryIdx).trim();
-    memory = raw.slice(memoryIdx + "## MEMORY".length).trim();
-  } else {
-    // No MEMORY section, use the whole thing as summary
-    const summaryIdx = raw.indexOf("## SUMMARY");
-    if (summaryIdx !== -1) {
-      summary = raw.slice(summaryIdx + "## SUMMARY".length).trim();
+  // Support both "## MEMORY" and "**MEMORY**" header formats
+  const memoryPattern = /(?:^|\n)\s*(?:#{1,3}\s*MEMORY|\*{1,2}MEMORY\*{1,2})\s*/i;
+  const summaryPattern = /(?:^|\n)\s*(?:#{1,3}\s*SUMMARY|\*{1,2}SUMMARY\*{1,2})\s*/i;
+
+  const memoryMatch = memoryPattern.exec(raw);
+  const summaryMatch = summaryPattern.exec(raw);
+
+  if (memoryMatch) {
+    const memoryContentStart = memoryMatch.index + memoryMatch[0].length;
+
+    if (summaryMatch && summaryMatch.index < memoryMatch.index) {
+      const summaryContentStart = summaryMatch.index + summaryMatch[0].length;
+      summary = raw.slice(summaryContentStart, memoryMatch.index).trim();
+    } else {
+      summary = raw.slice(0, memoryMatch.index).trim();
     }
+    memory = raw.slice(memoryContentStart).trim();
+  } else if (summaryMatch) {
+    summary = raw.slice(summaryMatch.index + summaryMatch[0].length).trim();
   }
 
   return { summary, memory };

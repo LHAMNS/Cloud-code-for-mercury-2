@@ -149,9 +149,18 @@ export class MercuryClient {
    * Build the request body for Mercury-2.
    */
   _buildRequestBody(messages, options = {}) {
+    // Sanitize messages: ensure content is always a string (Mercury-2 rejects null content)
+    const sanitized = messages.map((msg) => {
+      const m = { ...msg };
+      if (m.content === null || m.content === undefined) {
+        m.content = "";
+      }
+      return m;
+    });
+
     const body = {
       model: options.model || this.config.model,
-      messages,
+      messages: sanitized,
       max_tokens: options.max_tokens || this.config.max_tokens,
       temperature: options.temperature || this.config.temperature,
       reasoning_effort:

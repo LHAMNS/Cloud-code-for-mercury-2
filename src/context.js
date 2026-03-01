@@ -389,10 +389,21 @@ function buildFallbackSummary(messages) {
             if (args.file_path) filesWritten.add(args.file_path);
             break;
           case "Edit":
+          case "Patch":
             if (args.file_path) filesWritten.add(args.file_path);
             break;
           case "Bash":
             if (args.command) commandsRun.push(truncate(args.command, 80));
+            break;
+          case "Diff":
+            if (args.file_a) filesRead.add(args.file_a);
+            if (args.file_b) filesRead.add(args.file_b);
+            break;
+          case "Fetch":
+            if (args.url) commandsRun.push(`fetch ${truncate(args.url, 60)}`);
+            break;
+          case "ListDir":
+            if (args.path) filesRead.add(args.path);
             break;
         }
       }

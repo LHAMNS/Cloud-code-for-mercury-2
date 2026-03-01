@@ -116,9 +116,9 @@ export function printHelp() {
 export function printToolCall(name, args) {
   // Tool icon based on type
   const icons = {
-    Read: "📖", Write: "📝", Edit: "✏️ ", Bash: "⚡",
-    Glob: "🔍", Grep: "🔎", SubAgent: "🤖", SubAgentTeam: "👥",
-    ListDir: "📂", Diff: "📊", Fetch: "🌐",
+    Read: "📖", Write: "📝", Edit: "✏️ ", Patch: "🔨", Bash: "⚡",
+    Glob: "🔍", Grep: "🔎", ListDir: "📂", Diff: "📊", Fetch: "🌐",
+    SubAgent: "🤖", SubAgentTeam: "👥",
   };
   const icon = icons[name] || "🔧";
 
@@ -151,6 +151,12 @@ function _formatToolArgs(name, args) {
       return args.pattern ? `/${args.pattern}/` : "";
     case "Fetch":
       return args.url ? `→ ${args.url}` : "";
+    case "Patch":
+      return args.file_path ? `→ ${basename(args.file_path)} (${args.edits?.length || 0} edits)` : "";
+    case "Diff":
+      if (args.file_a && args.file_b) return `${basename(args.file_a)} ↔ ${basename(args.file_b)}`;
+      if (args.git_ref) return `ref: ${args.git_ref}`;
+      return args.file_a ? `→ ${basename(args.file_a)}` : "uncommitted changes";
     case "ListDir":
       return args.path || "";
     case "SubAgent":

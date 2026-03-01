@@ -58,7 +58,7 @@ export class MercuryClient {
       if (resolve) {
         const r = resolve;
         resolve = null;
-        if (err) r(Promise.reject(err));
+        if (err) r({ value: undefined, done: true, error: err });
         else r({ value: undefined, done: true });
       }
     }
@@ -74,6 +74,7 @@ export class MercuryClient {
           Authorization: `Bearer ${this.apiKey}`,
           "Content-Length": Buffer.byteLength(requestBody),
         },
+        timeout: 120000, // 2 minute connection timeout
       },
       (res) => {
         if (res.statusCode !== 200) {
@@ -125,6 +126,9 @@ export class MercuryClient {
     );
 
     req.on("error", (err) => finish(err));
+    req.on("timeout", () => {
+      req.destroy(new Error("Request timed out (120s)"));
+    });
     req.write(requestBody);
     req.end();
 
@@ -140,7 +144,10 @@ export class MercuryClient {
           const result = await new Promise((r) => {
             resolve = r;
           });
-          if (result.done) return;
+          if (result.done) {
+            if (result.error) throw result.error;
+            return;
+          }
           yield result.value;
         }
       }
@@ -208,6 +215,7 @@ export class MercuryClient {
             Authorization: `Bearer ${this.apiKey}`,
             "Content-Length": Buffer.byteLength(requestBody),
           },
+          timeout: 120000, // 2 minute connection timeout
         },
         (res) => {
           let data = "";
@@ -234,6 +242,9 @@ export class MercuryClient {
       );
 
       req.on("error", reject);
+      req.on("timeout", () => {
+        req.destroy(new Error("Request timed out (120s)"));
+      });
       req.write(requestBody);
       req.end();
     });

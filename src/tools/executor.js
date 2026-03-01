@@ -1,9 +1,19 @@
 import { readFile, writeFile, mkdir, readdir, stat } from 'node:fs/promises';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import http from 'node:http';
 import https from 'node:https';
 import path from 'node:path';
 import { SubAgent, runSubAgentTeam } from '../subagent.js';
+
+/**
+ * Validate a git ref to prevent command injection.
+ * Only allows hex hashes, branch-like names, and common refs.
+ */
+function isValidGitRef(ref) {
+  if (!ref || typeof ref !== 'string') return false;
+  // Allow: hex hashes, alphanumeric with /-._~^, HEAD, HEAD~N, branch names
+  return /^[a-zA-Z0-9._\-/~^]+$/.test(ref) && ref.length <= 200;
+}
 
 /**
  * Simple recursive glob implementation without external dependencies.
@@ -128,7 +138,7 @@ export class ToolExecutor {
       subagentteam: '_subAgentTeam',
     };
 
-    const handler = handlers[toolName];
+    const handler = handlers[toolName.toLowerCase()];
     if (!handler) {
       return `Error: Unknown tool "${toolName}". Available tools: ${Object.keys(handlers).join(', ')}`;
     }
@@ -556,8 +566,9 @@ export class ToolExecutor {
       return `Error reading file: ${err.message}`;
     }
 
-    let applied = 0;
+    // Validate all edits can be applied before writing anything (transactional)
     const errors = [];
+    let testContent = content;
 
     for (let i = 0; i < edits.length; i++) {
       const { old_string, new_string } = edits[i];
@@ -565,26 +576,25 @@ export class ToolExecutor {
         errors.push(`Edit ${i + 1}: missing old_string or new_string`);
         continue;
       }
-      const idx = content.indexOf(old_string);
+      const idx = testContent.indexOf(old_string);
       if (idx === -1) {
-        errors.push(`Edit ${i + 1}: old_string not found`);
+        errors.push(`Edit ${i + 1}: old_string not found (may overlap with previous edit)`);
         continue;
       }
-      content = content.substring(0, idx) + new_string + content.substring(idx + old_string.length);
-      applied++;
+      testContent = testContent.substring(0, idx) + new_string + testContent.substring(idx + old_string.length);
+    }
+
+    if (errors.length > 0) {
+      return `Patch aborted (no changes written). Errors:\n${errors.join('\n')}`;
     }
 
     try {
-      await writeFile(file_path, content, 'utf-8');
+      await writeFile(file_path, testContent, 'utf-8');
     } catch (err) {
       return `Error writing file: ${err.message}`;
     }
 
-    let result = `Applied ${applied}/${edits.length} edits to ${file_path}`;
-    if (errors.length > 0) {
-      result += `\nWarnings:\n${errors.join('\n')}`;
-    }
-    return result;
+    return `Applied ${edits.length}/${edits.length} edits to ${file_path}`;
   }
 
   /**
@@ -667,78 +677,73 @@ export class ToolExecutor {
   }
 
   /**
-   * Show file or git diffs.
+   * Show file or git diffs. Uses execFileSync to prevent command injection.
    */
   async _diff(args) {
     const { file_a, file_b, git_ref } = args;
+    const execOpts = { encoding: 'utf-8', timeout: 30000, maxBuffer: 5 * 1024 * 1024 };
+
+    // Validate git ref if provided
+    if (git_ref && !isValidGitRef(git_ref)) {
+      return `Error: Invalid git ref "${git_ref}". Only alphanumeric, /, -, ., _, ~, ^ allowed.`;
+    }
 
     // Case 1: git diff against a ref
     if (git_ref && !file_a && !file_b) {
       try {
-        const result = execSync(`git diff ${git_ref}`, {
-          encoding: 'utf-8',
-          timeout: 30000,
-          maxBuffer: 5 * 1024 * 1024,
-        });
+        const result = execFileSync('git', ['diff', git_ref], execOpts);
         return result || '(no changes)';
       } catch (err) {
-        return `Error: ${err.message}`;
+        return `Error: ${err.stderr || err.message}`;
       }
     }
 
     // Case 2: git diff for a specific file
     if (file_a && !file_b) {
+      const ref = git_ref || 'HEAD';
+      if (!isValidGitRef(ref)) return `Error: Invalid git ref "${ref}".`;
       try {
-        const ref = git_ref || 'HEAD';
-        const result = execSync(`git diff ${ref} -- "${file_a}"`, {
-          encoding: 'utf-8',
-          timeout: 30000,
-          maxBuffer: 5 * 1024 * 1024,
-        });
+        const result = execFileSync('git', ['diff', ref, '--', file_a], execOpts);
         return result || `(no changes for ${file_a})`;
       } catch (err) {
-        return `Error: ${err.message}`;
+        return `Error: ${err.stderr || err.message}`;
       }
     }
 
     // Case 3: diff between two files
     if (file_a && file_b) {
       try {
-        const result = execSync(`diff -u "${file_a}" "${file_b}"`, {
-          encoding: 'utf-8',
-          timeout: 30000,
-          maxBuffer: 5 * 1024 * 1024,
-        });
+        const result = execFileSync('diff', ['-u', file_a, file_b], execOpts);
         return result || '(files are identical)';
       } catch (err) {
-        // diff returns exit code 1 when files differ
         if (err.stdout) return err.stdout;
-        return `Error: ${err.message}`;
+        return `Error: ${err.stderr || err.message}`;
       }
     }
 
     // Case 4: no args → show all uncommitted changes
     try {
-      const result = execSync('git diff', {
-        encoding: 'utf-8',
-        timeout: 30000,
-        maxBuffer: 5 * 1024 * 1024,
-      });
+      const result = execFileSync('git', ['diff'], execOpts);
       return result || '(no uncommitted changes)';
     } catch (err) {
-      return `Error: ${err.message}`;
+      return `Error: ${err.stderr || err.message}`;
     }
   }
 
   /**
    * Fetch content from a URL via HTTP/HTTPS.
    */
-  async _fetch(args) {
+  async _fetch(args, _redirectCount = 0) {
     const { url, method = 'GET', headers = {}, body } = args;
+    const MAX_REDIRECTS = 5;
+    const MAX_BODY_SIZE = 2 * 1024 * 1024; // 2MB max response
 
     if (!url) return 'Error: url is required.';
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
       return 'Error: url must start with http:// or https://';
+    }
+    if (_redirectCount > MAX_REDIRECTS) {
+      return `Error: Too many redirects (>${MAX_REDIRECTS})`;
     }
 
     return new Promise((resolve) => {
@@ -758,24 +763,30 @@ export class ToolExecutor {
       };
 
       const req = lib.request(options, (res) => {
-        // Handle redirects
+        // Follow redirects automatically
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          resolve(`Redirect to: ${res.headers.location} (${res.statusCode})`);
+          const redirectUrl = new URL(res.headers.location, url).toString();
+          resolve(this._fetch({ ...args, url: redirectUrl }, _redirectCount + 1));
           return;
         }
 
         let data = '';
-        res.on('data', (chunk) => (data += chunk.toString()));
+        let size = 0;
+        res.on('data', (chunk) => {
+          size += chunk.length;
+          if (size <= MAX_BODY_SIZE) {
+            data += chunk.toString();
+          }
+        });
         res.on('end', () => {
-          if (res.statusCode >= 400) {
+          if (size > MAX_BODY_SIZE) {
+            resolve(data.slice(0, 50000) + `\n... (response too large: ${(size/1024).toFixed(0)}KB, truncated)`);
+          } else if (res.statusCode >= 400) {
             resolve(`HTTP ${res.statusCode}: ${data.slice(0, 2000)}`);
+          } else if (data.length > 50000) {
+            resolve(data.slice(0, 50000) + `\n... (truncated, ${data.length} total chars)`);
           } else {
-            // Truncate very large responses
-            if (data.length > 50000) {
-              resolve(data.slice(0, 50000) + `\n... (truncated, ${data.length} total bytes)`);
-            } else {
-              resolve(data);
-            }
+            resolve(data);
           }
         });
       });

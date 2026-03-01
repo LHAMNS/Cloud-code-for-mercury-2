@@ -123,11 +123,16 @@ export class SessionHistory {
 
     if (!session) return null;
 
-    const raw = await readFile(
-      path.join(this.dir, session.filename),
-      "utf-8"
-    );
-    return JSON.parse(raw);
+    let raw;
+    try {
+      raw = await readFile(
+        path.join(this.dir, session.filename),
+        "utf-8"
+      );
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
   }
 
   /**

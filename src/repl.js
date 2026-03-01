@@ -78,8 +78,10 @@ export class MercuryRepl {
       prompt: "\x1b[38;5;87m\x1b[1m❯ \x1b[0m",
     });
 
-    // Enable raw mode for ESC detection
+    // Enable keypress events for ESC detection
+    // Must be called BEFORE readline manages stdin, and readline handles raw mode itself
     if (process.stdin.isTTY) {
+      readline.emitKeypressEvents(process.stdin, this._rl);
       this._setupKeyListener();
     }
 
@@ -93,8 +95,8 @@ export class MercuryRepl {
       }
     });
 
-    this._rl.on("close", () => {
-      this._gracefulExit();
+    this._rl.on("close", async () => {
+      await this._gracefulExit();
     });
 
     this._rl.prompt();
@@ -118,7 +120,7 @@ export class MercuryRepl {
 
         if (this._escPresses.length >= 3) {
           this._escPresses = [];
-          this._enterRollbackMode();
+          this._enterRollbackMode().catch(() => {});
         }
       }
     });
@@ -157,9 +159,10 @@ export class MercuryRepl {
     }
 
     // Create a rollback checkpoint before processing
+    // Use .messages directly (not getMessages which prepends system prompt)
     this.rollback.createCheckpoint(
       trimmed,
-      this.conversation.getMessages()
+      this.conversation.messages
     );
 
     this.conversation.addUserMessage(trimmed);

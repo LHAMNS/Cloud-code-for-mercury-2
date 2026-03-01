@@ -4,7 +4,7 @@
 //   1. Full rollback: restore files AND conversation context
 //   2. Context-only: restore conversation context only (keep file changes)
 
-import { readFile, writeFile, mkdir, readdir, cp, rm } from "node:fs/promises";
+import { readFile, writeFile, mkdir, readdir, rm } from "node:fs/promises";
 import { execSync } from "node:child_process";
 import path from "node:path";
 
@@ -64,27 +64,6 @@ export class RollbackManager {
   }
 
   /**
-   * Create a git stash-like snapshot for file rollback.
-   * Returns a ref that can be used to restore.
-   */
-  _snapshotFiles() {
-    if (!this._useGit) return null;
-    try {
-      // Save current state: stage everything, create a temporary commit
-      const hash = this._getGitHash();
-      // Also track if there are uncommitted changes
-      const status = execSync("git status --porcelain", {
-        cwd: this.cwd,
-        stdio: "pipe",
-        encoding: "utf-8",
-      }).trim();
-      return { hash, hasChanges: status.length > 0, status };
-    } catch {
-      return null;
-    }
-  }
-
-  /**
    * Create a checkpoint at the current state (called before each user message is processed).
    * @param {string} userMessage - The user's message text
    * @param {Array} messages - Current conversation messages (will be deep-cloned)
@@ -129,11 +108,15 @@ export class RollbackManager {
     if (this._useGit && cp.gitHash) {
       try {
         // Stash current changes first (safety net)
-        execSync("git stash push -m 'mercury-rollback-backup' --include-untracked", {
-          cwd: this.cwd,
-          stdio: "pipe",
-        });
-        // Hard reset to the checkpoint's commit
+        try {
+          execSync("git stash push -m 'mercury-rollback-backup' --include-untracked", {
+            cwd: this.cwd,
+            stdio: "pipe",
+          });
+        } catch {
+          // Stash may fail if there are no changes; continue anyway
+        }
+        // Restore files to the checkpoint's commit state
         execSync(`git checkout ${cp.gitHash} -- .`, {
           cwd: this.cwd,
           stdio: "pipe",

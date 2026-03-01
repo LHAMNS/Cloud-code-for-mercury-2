@@ -2,6 +2,7 @@ import { readFile, writeFile, mkdir, readdir, stat } from 'node:fs/promises';
 import { execSync, spawn } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
+import { SubAgent, runSubAgentTeam } from '../subagent.js';
 
 /**
  * Simple recursive glob implementation without external dependencies.
@@ -84,6 +85,15 @@ function globToRegex(pattern) {
 
 export class ToolExecutor {
   /**
+   * @param {object} [options] - Options to pass down to sub-agents
+   * @param {string} [options.apiKey] - API key for sub-agent calls
+   * @param {string} [options.baseURL] - API base URL for sub-agent calls
+   */
+  constructor(options = {}) {
+    this._clientOptions = options;
+  }
+
+  /**
    * Dispatch a tool call to the appropriate handler method.
    * @param {string} toolName - Name of the tool to execute
    * @param {object} args - Arguments for the tool
@@ -97,6 +107,8 @@ export class ToolExecutor {
       bash: '_bash',
       glob: '_glob',
       grep: '_grep',
+      subagent: '_subAgent',
+      subagentteam: '_subAgentTeam',
     };
 
     const handler = handlers[toolName];
@@ -489,5 +501,49 @@ export class ToolExecutor {
         await this._grepFile(fullPath, regex, results, maxResults);
       }
     }
+  }
+
+  /**
+   * Spawn a single sub-agent to handle a task autonomously.
+   * @param {object} args
+   * @param {string} args.task - Description of the task
+   * @returns {string} Sub-agent's final response
+   */
+  async _subAgent(args) {
+    const { task } = args;
+    if (!task) {
+      return 'Error: task is required.';
+    }
+
+    const agent = new SubAgent({ task, ...this._clientOptions });
+    return await agent.run();
+  }
+
+  /**
+   * Spawn a team of sub-agents to work on tasks in parallel.
+   * @param {object} args
+   * @param {Array<{task: string}>} args.tasks - Array of task descriptions
+   * @returns {string} Combined results from all sub-agents
+   */
+  async _subAgentTeam(args) {
+    const { tasks } = args;
+    if (!tasks || !Array.isArray(tasks) || tasks.length === 0) {
+      return 'Error: tasks array is required and must not be empty.';
+    }
+
+    if (tasks.length > 5) {
+      return 'Error: Maximum 5 sub-agents allowed per team.';
+    }
+
+    const results = await runSubAgentTeam(tasks, this._clientOptions);
+
+    // Format results
+    const formatted = results.map((result, i) => {
+      const taskDesc = typeof tasks[i] === 'string' ? tasks[i] : tasks[i].task;
+      const truncatedTask = taskDesc.length > 80 ? taskDesc.slice(0, 80) + '...' : taskDesc;
+      return `── Sub-agent ${i + 1}: ${truncatedTask} ──\n${result}`;
+    });
+
+    return formatted.join('\n\n');
   }
 }

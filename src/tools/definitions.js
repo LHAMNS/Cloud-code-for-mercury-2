@@ -208,6 +208,80 @@ const GrepTool = {
 };
 
 /**
+ * Spawn a sub-agent to handle a specific task autonomously.
+ */
+const SubAgentTool = {
+  type: "function",
+  function: {
+    name: "SubAgent",
+    description:
+      "Spawn an autonomous sub-agent to handle a specific task. " +
+      "The sub-agent gets its own isolated conversation context and can use all the same tools " +
+      "(Read, Write, Edit, Bash, Glob, Grep). " +
+      "Use this for tasks that can be done independently, such as: " +
+      "searching the codebase for specific patterns, reading and analyzing files, " +
+      "running tests, or performing research. " +
+      "The sub-agent runs to completion and returns its findings as text. " +
+      "You can spawn multiple sub-agents concurrently for parallel work.",
+    parameters: {
+      type: "object",
+      properties: {
+        task: {
+          type: "string",
+          description:
+            "A detailed description of what the sub-agent should do. " +
+            "Be specific — include file paths, patterns to search for, " +
+            "or exact operations to perform. The sub-agent has no context " +
+            "from the main conversation, so include all necessary information.",
+        },
+      },
+      required: ["task"],
+    },
+  },
+};
+
+/**
+ * Spawn a team of sub-agents to work on multiple tasks in parallel.
+ */
+const SubAgentTeamTool = {
+  type: "function",
+  function: {
+    name: "SubAgentTeam",
+    description:
+      "Spawn multiple sub-agents to work on different tasks in parallel. " +
+      "Each sub-agent gets its own context and can use all tools independently. " +
+      "All sub-agents run concurrently and results are returned together. " +
+      "Use this when you need to perform multiple independent research or analysis tasks " +
+      "simultaneously (e.g., searching different parts of the codebase, " +
+      "running different test suites, analyzing different files). " +
+      "Maximum 5 concurrent sub-agents.",
+    parameters: {
+      type: "object",
+      properties: {
+        tasks: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              task: {
+                type: "string",
+                description: "Detailed description of this sub-agent's task.",
+              },
+            },
+            required: ["task"],
+          },
+          description:
+            "Array of task objects, each describing a task for one sub-agent. " +
+            "Each task should be self-contained with all necessary context.",
+          maxItems: 5,
+        },
+      },
+      required: ["tasks"],
+    },
+  },
+};
+
+/**
  * Complete list of tool definitions in OpenAI function calling format.
  */
 export const TOOL_DEFINITIONS = [
@@ -217,4 +291,6 @@ export const TOOL_DEFINITIONS = [
   BashTool,
   GlobTool,
   GrepTool,
+  SubAgentTool,
+  SubAgentTeamTool,
 ];

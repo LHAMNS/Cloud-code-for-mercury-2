@@ -29,7 +29,10 @@ const MAX_TOOL_TURNS = 100;
 export class MercuryRepl {
   constructor(options = {}) {
     this.client = new MercuryClient(options);
-    this.toolExecutor = new ToolExecutor();
+    this.toolExecutor = new ToolExecutor({
+      apiKey: options.apiKey,
+      baseURL: options.baseURL,
+    });
     this.memory = new MemoryManager(process.cwd());
     this.log = new ConversationLog(process.cwd());
     this.conversation = new Conversation(buildSystemPrompt(process.cwd()));

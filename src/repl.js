@@ -6,6 +6,7 @@ import readline from "node:readline";
 import { MercuryClient } from "./client.js";
 import { Conversation } from "./conversation.js";
 import { buildSystemPrompt } from "./system-prompt.js";
+import { REASONING_LEVELS } from "./config.js";
 import { TOOL_DEFINITIONS } from "./tools/definitions.js";
 import { ToolExecutor } from "./tools/executor.js";
 import {
@@ -172,7 +173,8 @@ export class MercuryRepl {
   // ── Slash commands ───────────────────────────────────────────────────────
 
   _handleCommand(cmd) {
-    const command = cmd.toLowerCase().split(/\s+/)[0];
+    const parts = cmd.toLowerCase().split(/\s+/);
+    const command = parts[0];
     switch (command) {
       case "/help":
         printHelp();
@@ -185,12 +187,34 @@ export class MercuryRepl {
         printInfo("Current configuration:");
         console.log(JSON.stringify(this.client.config, null, 2));
         break;
+      case "/reasoning": {
+        const level = parts[1];
+        if (!level) {
+          printInfo(
+            `Current reasoning effort: ${this.client.config.reasoning_effort}`
+          );
+          printInfo(`Available levels: ${REASONING_LEVELS.join(", ")}`);
+          printInfo(`Usage: /reasoning <level>`);
+          break;
+        }
+        if (!REASONING_LEVELS.includes(level)) {
+          printError(
+            `Invalid level "${level}". Choose from: ${REASONING_LEVELS.join(", ")}`
+          );
+          break;
+        }
+        this.client.config.reasoning_effort = level;
+        printInfo(`Reasoning effort set to: ${level}`);
+        break;
+      }
       case "/exit":
         printInfo("Goodbye!");
         process.exit(0);
         break;
       default:
-        printError(`Unknown command: ${cmd}. Type /help for available commands.`);
+        printError(
+          `Unknown command: ${cmd}. Type /help for available commands.`
+        );
     }
   }
 

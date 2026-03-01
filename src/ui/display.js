@@ -36,10 +36,11 @@ export function printWelcome() {
  */
 export function printHelp() {
   console.log(`\n${CYAN}${BOLD}Available Commands:${RESET}`);
-  console.log(`  ${GREEN}/help${RESET}        - Show this help message`);
-  console.log(`  ${GREEN}/clear${RESET}       - Clear conversation`);
-  console.log(`  ${GREEN}/config${RESET}      - Show current config`);
-  console.log(`  ${GREEN}/exit${RESET} or ${DIM}Ctrl+C${RESET} - Exit\n`);
+  console.log(`  ${GREEN}/help${RESET}             - Show this help message`);
+  console.log(`  ${GREEN}/clear${RESET}            - Clear conversation`);
+  console.log(`  ${GREEN}/reasoning <level>${RESET} - Set reasoning effort (instant/low/medium/high)`);
+  console.log(`  ${GREEN}/config${RESET}           - Show current config`);
+  console.log(`  ${GREEN}/exit${RESET} or ${DIM}Ctrl+C${RESET}    - Exit\n`);
 }
 
 /**

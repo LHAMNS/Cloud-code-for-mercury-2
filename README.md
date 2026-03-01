@@ -31,19 +31,20 @@ mercury-code --verbose
 
 ### Commands
 
-| Command   | Description            |
-|-----------|------------------------|
-| `/help`   | Show available commands |
-| `/clear`  | Clear conversation      |
-| `/config` | Show current config     |
-| `/exit`   | Exit                    |
+| Command              | Description                              |
+|----------------------|------------------------------------------|
+| `/help`              | Show available commands                   |
+| `/clear`             | Clear conversation                        |
+| `/reasoning <level>` | Set reasoning effort (instant/low/medium/high) |
+| `/config`            | Show current config                       |
+| `/exit`              | Exit                                      |
 
 ## Configuration
 
 | Parameter          | Default    | Description                          |
 |--------------------|------------|--------------------------------------|
 | `model`            | mercury-2  | Model name                           |
-| `max_tokens`       | 100000     | Max output tokens                    |
+| `max_tokens`       | 50000      | Max output tokens                    |
 | `temperature`      | 0.75       | Randomness (0.5-1.0)                |
 | `reasoning_effort` | medium     | Reasoning depth (instant/low/medium/high) |
 | `stream`           | true       | Stream responses                     |
@@ -63,4 +64,4 @@ The assistant can use these tools to interact with your filesystem:
 
 Mercury-2 uses an OpenAI-compatible endpoint at `https://api.inceptionlabs.ai/v1/chat/completions`.
 
-Set `INCEPTION_API_KEY` in your environment. Context window: 128K tokens. Max output: 100K tokens.
+Set `INCEPTION_API_KEY` in your environment. Context window: 128K tokens. Max output: 50K tokens.

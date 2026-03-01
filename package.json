@@ -1,0 +1,29 @@
+{
+  "name": "mercury-code",
+  "version": "1.0.0",
+  "description": "Interactive AI coding assistant powered by Mercury-2 diffusion model from Inception Labs",
+  "main": "src/index.js",
+  "type": "module",
+  "bin": {
+    "mercury": "./cli.js",
+    "mercury-code": "./cli.js"
+  },
+  "scripts": {
+    "start": "node cli.js",
+    "dev": "node cli.js --verbose"
+  },
+  "keywords": [
+    "mercury",
+    "mercury-2",
+    "diffusion-model",
+    "coding-assistant",
+    "cli",
+    "ai",
+    "inception-labs"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT",
+  "dependencies": {}
+}

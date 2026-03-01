@@ -1,0 +1,245 @@
+// Mercury Code - REPL (Read-Eval-Print Loop)
+// Handles user input, sends messages to Mercury-2, processes tool calls,
+// and displays results.
+
+import readline from "node:readline";
+import { MercuryClient } from "./client.js";
+import { Conversation } from "./conversation.js";
+import { buildSystemPrompt } from "./system-prompt.js";
+import { TOOL_DEFINITIONS } from "./tools/definitions.js";
+import { ToolExecutor } from "./tools/executor.js";
+import {
+  printWelcome,
+  printHelp,
+  printToolCall,
+  printToolResult,
+  printError,
+  printInfo,
+  printTokenUsage,
+  printStreamChunk,
+  printStreamEnd,
+  spinner,
+} from "./ui/display.js";
+
+export class MercuryRepl {
+  constructor(options = {}) {
+    this.client = new MercuryClient(options);
+    this.toolExecutor = new ToolExecutor();
+    this.conversation = new Conversation(buildSystemPrompt(process.cwd()));
+    this.verbose = options.verbose || false;
+    this._rl = null;
+  }
+
+  // ── Interactive mode ─────────────────────────────────────────────────────
+
+  async start() {
+    printWelcome();
+
+    this._rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+      prompt: "\x1b[32m\u276F \x1b[0m", // green ❯
+    });
+
+    this._rl.on("line", async (line) => {
+      await this._handleInput(line);
+    });
+
+    this._rl.on("close", () => {
+      printInfo("Goodbye!");
+      process.exit(0);
+    });
+
+    this._rl.prompt();
+  }
+
+  // ── Single-shot mode ─────────────────────────────────────────────────────
+
+  async runOnce(promptText) {
+    this.conversation.addUserMessage(promptText);
+    try {
+      await this._sendAndProcess();
+    } catch (err) {
+      printError(`Error: ${err.message}`);
+      if (this.verbose) console.error(err.stack);
+      process.exit(1);
+    }
+    process.exit(0);
+  }
+
+  // ── Input handling ───────────────────────────────────────────────────────
+
+  async _handleInput(input) {
+    const trimmed = input.trim();
+    if (!trimmed) {
+      this._rl.prompt();
+      return;
+    }
+
+    if (trimmed.startsWith("/")) {
+      this._handleCommand(trimmed);
+      this._rl.prompt();
+      return;
+    }
+
+    this.conversation.addUserMessage(trimmed);
+
+    try {
+      await this._sendAndProcess();
+    } catch (err) {
+      printError(`Unexpected error: ${err.message}`);
+      if (this.verbose) console.error(err.stack);
+    }
+
+    this._rl.prompt();
+  }
+
+  // ── Core loop: send to Mercury-2 and process the response ────────────────
+
+  async _sendAndProcess() {
+    this.conversation.trimIfNeeded();
+    spinner.start("Thinking...");
+
+    try {
+      const chunks = [];
+      let firstChunk = true;
+
+      for await (const chunk of this.client.chatCompletionStream(
+        this.conversation.getMessages(),
+        { tools: TOOL_DEFINITIONS }
+      )) {
+        if (firstChunk) {
+          spinner.stop();
+          firstChunk = false;
+        }
+
+        chunks.push(chunk);
+
+        // Stream text to terminal in real-time
+        const delta = chunk.choices?.[0]?.delta;
+        if (delta?.content) {
+          printStreamChunk(delta.content);
+        }
+      }
+
+      if (firstChunk) spinner.stop(); // no chunks at all
+
+      const response = this._assembleStreamResponse(chunks);
+
+      if (response.content) printStreamEnd();
+
+      // ── Tool calls ──────────────────────────────────────────────────────
+      if (response.tool_calls && response.tool_calls.length > 0) {
+        this.conversation.addAssistantMessage(
+          response.content || null,
+          response.tool_calls
+        );
+
+        for (const tc of response.tool_calls) {
+          const fnName = tc.function.name;
+          let args;
+          try {
+            args = JSON.parse(tc.function.arguments);
+          } catch {
+            args = {};
+            printError(`Bad arguments for tool "${fnName}"`);
+          }
+
+          printToolCall(fnName, args);
+          const result = await this.toolExecutor.execute(
+            fnName.toLowerCase(),
+            args
+          );
+          printToolResult(result);
+          this.conversation.addToolResult(tc.id, String(result));
+        }
+
+        // Let the model continue after tool results
+        await this._sendAndProcess();
+        return;
+      }
+
+      // ── Plain text response ──────────────────────────────────────────────
+      this.conversation.addAssistantMessage(response.content || "");
+      if (response.usage) printTokenUsage(response.usage);
+    } catch (err) {
+      spinner.stop();
+      printError(`API error: ${err.message}`);
+      if (this.verbose) console.error(err.stack);
+    }
+  }
+
+  // ── Slash commands ───────────────────────────────────────────────────────
+
+  _handleCommand(cmd) {
+    const command = cmd.toLowerCase().split(/\s+/)[0];
+    switch (command) {
+      case "/help":
+        printHelp();
+        break;
+      case "/clear":
+        this.conversation.clear();
+        printInfo("Conversation cleared.");
+        break;
+      case "/config":
+        printInfo("Current configuration:");
+        console.log(JSON.stringify(this.client.config, null, 2));
+        break;
+      case "/exit":
+        printInfo("Goodbye!");
+        process.exit(0);
+        break;
+      default:
+        printError(`Unknown command: ${cmd}. Type /help for available commands.`);
+    }
+  }
+
+  // ── Stream assembly ──────────────────────────────────────────────────────
+
+  _assembleStreamResponse(chunks) {
+    let content = "";
+    const toolCallMap = {};
+    let usage = null;
+
+    for (const chunk of chunks) {
+      if (chunk.usage) usage = chunk.usage;
+
+      const choice = chunk.choices?.[0];
+      if (!choice) continue;
+      const delta = choice.delta;
+      if (!delta) continue;
+
+      if (delta.content) content += delta.content;
+
+      if (delta.tool_calls) {
+        for (const tc of delta.tool_calls) {
+          const idx = tc.index;
+          if (!toolCallMap[idx]) {
+            toolCallMap[idx] = {
+              id: tc.id || "",
+              type: tc.type || "function",
+              function: {
+                name: tc.function?.name || "",
+                arguments: tc.function?.arguments || "",
+              },
+            };
+          } else {
+            if (tc.id) toolCallMap[idx].id = tc.id;
+            if (tc.function?.name)
+              toolCallMap[idx].function.name = tc.function.name;
+            if (tc.function?.arguments)
+              toolCallMap[idx].function.arguments += tc.function.arguments;
+          }
+        }
+      }
+    }
+
+    const indices = Object.keys(toolCallMap)
+      .map(Number)
+      .sort((a, b) => a - b);
+    const tool_calls =
+      indices.length > 0 ? indices.map((i) => toolCallMap[i]) : null;
+
+    return { content: content || null, tool_calls, usage };
+  }
+}

@@ -231,6 +231,7 @@ function _toolArgSummary(name, a) {
     case "Diff": return a.git_ref ? `ref:${a.git_ref}` : `${a.file_a||""} vs ${a.file_b||""}`;
     case "Fetch": return a.url || "?";
     case "SubAgent": return _trunc(a.task, 100);
+    case "ContextSearch": return `query: ${_trunc(a.query, 80)}${a.scope ? ` (${a.scope})` : ""}`;
     default: return _trunc(JSON.stringify(a), 100);
   }
 }

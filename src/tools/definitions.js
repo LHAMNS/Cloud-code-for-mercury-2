@@ -440,6 +440,47 @@ const PatchTool = {
 };
 
 /**
+ * Search the complete conversation log for relevant historical context.
+ * Uses Mercury-2 as a sub-agent to intelligently scan and extract content.
+ */
+const ContextSearchTool = {
+  type: "function",
+  function: {
+    name: "ContextSearch",
+    description:
+      "Search the complete conversation history (.mercury/conversation.jsonl) " +
+      "for relevant past context. This tool uses Mercury-2 to intelligently " +
+      "scan the full conversation log in chunks, finding and extracting " +
+      "relevant content (exact code changes, error messages, command outputs, " +
+      "earlier discussions, etc.). Use this when you need to recall details " +
+      "that may have been lost during context compression — it is your " +
+      "primary way to recover information from earlier in the session.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "Describe what you are looking for. Be specific: mention file names, " +
+            "function names, error messages, tool names, or topics. " +
+            "Example: 'the exact error message when running npm test earlier' " +
+            "or 'what changes were made to src/config.js'",
+        },
+        scope: {
+          type: "string",
+          description:
+            "Optional scope to narrow the search: 'recent' (last 25% of log), " +
+            "'early' (first 25% of log), or 'all' (full scan, default). " +
+            "Use 'recent' or 'early' for faster results when you know approximately " +
+            "when the information appeared.",
+        },
+      },
+      required: ["query"],
+    },
+  },
+};
+
+/**
  * Complete list of tool definitions in OpenAI function calling format.
  */
 export const TOOL_DEFINITIONS = [
@@ -453,6 +494,7 @@ export const TOOL_DEFINITIONS = [
   ListDirTool,
   DiffTool,
   FetchTool,
+  ContextSearchTool,
   SubAgentTool,
   SubAgentTeamTool,
 ];

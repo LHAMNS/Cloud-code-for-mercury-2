@@ -7,19 +7,19 @@ import { MercuryClient } from "./client.js";
 import { TOOL_DEFINITIONS } from "./tools/definitions.js";
 import { ToolExecutor } from "./tools/executor.js";
 import { buildSystemPrompt } from "./system-prompt.js";
-import { estimateMessagesTokens } from "./context.js";
+import { estimateTokens, estimateMessagesTokens, compressContext } from "./context.js";
 import { MODEL_LIMITS } from "./config.js";
 
 // Maximum tool turns per sub-agent (more conservative than main agent)
 const MAX_SUB_TURNS = 30;
 // Maximum concurrent sub-agents
 const MAX_CONCURRENT = 5;
-// Sub-agents cannot spawn further sub-agents — filter these out
+// Sub-agents cannot spawn further sub-agents or use expensive ContextSearch — filter these out
 const SUB_AGENT_TOOLS = TOOL_DEFINITIONS.filter(
-  (t) => !["SubAgent", "SubAgentTeam"].includes(t.function.name)
+  (t) => !["SubAgent", "SubAgentTeam", "ContextSearch"].includes(t.function.name)
 );
-// Max context tokens for a sub-agent before stopping (80% of model limit)
-const SUB_AGENT_CTX_LIMIT = Math.floor(MODEL_LIMITS.max_context_tokens * 0.8);
+// Compress sub-agent context at 70% capacity (same Codex approach as main agent)
+const SUB_AGENT_COMPRESS_THRESHOLD = 0.70;
 
 // Track running sub-agents globally for concurrency control
 let runningCount = 0;
@@ -70,16 +70,16 @@ export class SubAgent {
   }
 
   async _execute() {
-    // Build system prompt for the sub-agent
-    const systemPrompt =
+    // Build system prompt for the sub-agent (stored separately, like main agent)
+    this._systemPrompt =
       buildSystemPrompt(process.cwd()) +
       `\n## Sub-Agent Context\n\nYou are a sub-agent spawned by the main agent to handle a specific task. ` +
       `Focus exclusively on completing the assigned task. Be thorough but concise in your final response. ` +
       `Return only the relevant findings or results — the main agent will use your output to continue its work.\n` +
       `Note: You have access to core tools (Read, Write, Edit, Bash, Glob, Grep) but cannot spawn further sub-agents.\n`;
 
+    // Messages array WITHOUT system prompt (same pattern as main Conversation)
     this.messages = [
-      { role: "system", content: systemPrompt },
       { role: "user", content: this.task },
     ];
 
@@ -87,22 +87,28 @@ export class SubAgent {
     while (this._turnCount < MAX_SUB_TURNS) {
       this._turnCount++;
 
-      // Guard: check if sub-agent context is getting too large
-      const ctxTokens = estimateMessagesTokens(this.messages);
-      if (ctxTokens > SUB_AGENT_CTX_LIMIT) {
-        const lastAssistant = [...this.messages]
-          .reverse()
-          .find((m) => m.role === "assistant" && m.content);
-        return (
-          lastAssistant?.content ||
-          "(sub-agent stopped: context limit reached)"
+      // Codex-style context compression (same approach as main agent)
+      try {
+        await compressContext(
+          this.messages,       // Modified in-place
+          this._systemPrompt,  // For token estimation
+          this.client,         // Mercury-2 for summarization
+          null,                // No memory manager for sub-agents
+          () => {},            // Silent (no UI)
         );
+      } catch {
+        // Non-critical: continue even if compression fails
       }
 
       let response;
       try {
-        response = await this.client.chatCompletion(this.messages, {
-          tools: SUB_AGENT_TOOLS, // Core tools only — no SubAgent recursion
+        // Prepend system prompt for API call (same as Conversation.getMessages())
+        const apiMessages = [
+          { role: "system", content: this._systemPrompt },
+          ...this.messages,
+        ];
+        response = await this.client.chatCompletion(apiMessages, {
+          tools: SUB_AGENT_TOOLS,
           max_tokens: 16000,
           reasoning_effort: "low",
         });

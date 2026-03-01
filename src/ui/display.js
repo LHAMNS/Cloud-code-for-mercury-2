@@ -90,11 +90,13 @@ export function printHelp() {
     ["/clear", "清除对话历史"],
     ["/reasoning <level>", "设置推理深度 (instant/low/medium/high)"],
     ["/supercompress", "切换超级压缩模式 (on/off)"],
+    ["/contextsearch", "切换上下文搜索工具 (默认关闭，消耗token)"],
     ["/history", "查看/恢复历史会话"],
     ["/history save", "保存当前会话"],
     ["/history restore <n>", "恢复第 n 个会话"],
     ["/context", "查看上下文使用情况"],
-    ["/config", "显示当前配置"],
+    ["/settings", "查看/修改设置 (API密钥、模型参数等)"],
+    ["/config", "显示当前配置 (只读)"],
     ["/exit", "退出 Mercury Code"],
   ];
 
@@ -118,7 +120,7 @@ export function printToolCall(name, args) {
   const icons = {
     Read: "📖", Write: "📝", Edit: "✏️ ", Patch: "🔨", Bash: "⚡",
     Glob: "🔍", Grep: "🔎", ListDir: "📂", Diff: "📊", Fetch: "🌐",
-    SubAgent: "🤖", SubAgentTeam: "👥",
+    ContextSearch: "🔬", SubAgent: "🤖", SubAgentTeam: "👥",
   };
   const icon = icons[name] || "🔧";
 
@@ -159,6 +161,10 @@ function _formatToolArgs(name, args) {
       return args.file_a ? `→ ${basename(args.file_a)}` : "uncommitted changes";
     case "ListDir":
       return args.path || "";
+    case "ContextSearch":
+      return args.query
+        ? `query: ${args.query.length > 50 ? args.query.slice(0, 50) + "..." : args.query}${args.scope ? ` (${args.scope})` : ""}`
+        : "";
     case "SubAgent":
       return args.task
         ? args.task.length > 60 ? args.task.slice(0, 60) + "..." : args.task
@@ -214,6 +220,10 @@ export function printTokenUsage(usage) {
   const { prompt_tokens = 0, completion_tokens = 0, total_tokens = 0 } =
     usage || {};
 
+  // Extract reasoning token breakdown if available
+  const details = usage?.completion_tokens_details || {};
+  const reasoningTokens = details.reasoning_tokens || 0;
+
   // Mini bar showing prompt vs completion ratio
   const barWidth = 20;
   const total = prompt_tokens + completion_tokens || 1;
@@ -224,12 +234,17 @@ export function printTokenUsage(usage) {
     `${fg256(75)}${"█".repeat(promptBar)}${RESET}` +
     `${fg256(214)}${"█".repeat(compBar)}${RESET}`;
 
-  console.log(
+  let line =
     `${DIM}  tokens ${bar} ` +
-      `${fg256(75)}prompt:${prompt_tokens}${RESET} ` +
-      `${fg256(214)}completion:${completion_tokens}${RESET} ` +
-      `${DIM}total:${total_tokens}${RESET}`
-  );
+    `${fg256(75)}prompt:${prompt_tokens}${RESET} ` +
+    `${fg256(214)}completion:${completion_tokens}${RESET}`;
+
+  if (reasoningTokens > 0) {
+    line += ` ${fg256(141)}reasoning:${reasoningTokens}${RESET}`;
+  }
+
+  line += ` ${DIM}total:${total_tokens}${RESET}`;
+  console.log(line);
 }
 
 /**

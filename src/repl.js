@@ -49,6 +49,7 @@ export class MercuryRepl {
     this.rollback = new RollbackManager(process.cwd());
     this.verbose = options.verbose || false;
     this.superCompress = false;
+    this.contextSearchEnabled = false; // Expensive tool — user must enable with /contextsearch
     this._rl = null;
     this._toolTurnCount = 0;
     this._processing = false;
@@ -197,9 +198,16 @@ export class MercuryRepl {
         const chunks = [];
         let firstChunk = true;
 
+        // Dynamically build tools list — exclude ContextSearch when disabled
+        const activeTools = this.contextSearchEnabled
+          ? TOOL_DEFINITIONS
+          : TOOL_DEFINITIONS.filter(t => t.function.name !== 'ContextSearch');
+
+        let inReasoning = false; // Track whether we're in reasoning output
+
         for await (const chunk of this.client.chatCompletionStream(
           this.conversation.getMessages(),
-          { tools: TOOL_DEFINITIONS }
+          { tools: activeTools }
         )) {
           if (firstChunk) {
             spinner.stop();
@@ -207,10 +215,29 @@ export class MercuryRepl {
           }
           chunks.push(chunk);
           const delta = chunk.choices?.[0]?.delta;
-          if (delta?.content) printStreamChunk(delta.content);
+
+          // Handle reasoning/thinking output (Mercury-2 chain-of-thought)
+          const reasoning = delta?.reasoning_content || delta?.reasoning;
+          if (reasoning) {
+            if (!inReasoning) {
+              inReasoning = true;
+              printStreamChunk("\x1b[2m\x1b[3m💭 "); // Dim italic for reasoning
+            }
+            printStreamChunk(reasoning);
+          }
+
+          // Handle actual content output
+          if (delta?.content) {
+            if (inReasoning) {
+              inReasoning = false;
+              printStreamChunk("\x1b[0m\n"); // Reset formatting, newline
+            }
+            printStreamChunk(delta.content);
+          }
         }
 
         if (firstChunk) spinner.stop();
+        if (inReasoning) printStreamChunk("\x1b[0m\n"); // Close reasoning formatting
         response = this._assembleStreamResponse(chunks);
         if (response.content) printStreamEnd();
         if (response.usage) this.conversation.updateUsage(response.usage);
@@ -442,6 +469,18 @@ export class MercuryRepl {
         }
         break;
 
+      case "/contextsearch":
+        this.contextSearchEnabled = !this.contextSearchEnabled;
+        if (this.contextSearchEnabled) {
+          printInfo(
+            "上下文搜索: ON — 模型现在可以使用 ContextSearch 工具在完整对话日志中搜索历史内容。" +
+              "注意：此工具会消耗较多 token。"
+          );
+        } else {
+          printInfo("上下文搜索: OFF — ContextSearch 工具已禁用。模型仍可用 Read 直接读取 .mercury/conversation.jsonl。");
+        }
+        break;
+
       case "/history":
         await this._handleHistory(parts.slice(1));
         break;
@@ -453,7 +492,12 @@ export class MercuryRepl {
         printInfo(`记忆文件: ${this.memory.filePath}`);
         printInfo(`对话日志: ${this.log.filePath}`);
         printInfo(`超级压缩: ${this.superCompress ? "ON" : "OFF"}`);
+        printInfo(`上下文搜索: ${this.contextSearchEnabled ? "ON" : "OFF"}`);
         printInfo(`会话 ID: ${this._sessionId}`);
+        break;
+
+      case "/settings":
+        await this._handleSettings(parts.slice(1));
         break;
 
       case "/exit":
@@ -510,6 +554,116 @@ export class MercuryRepl {
     printError(`未知的 history 子命令: ${subCmd}。可用: list, save, restore`);
   }
 
+  // ── Settings ───────────────────────────────────────────────────────────────
+
+  async _handleSettings(args) {
+    const subCmd = args[0]?.toLowerCase();
+
+    if (!subCmd) {
+      // Show all current settings
+      console.log("");
+      console.log(`\x1b[1m\x1b[38;5;87m  ╭─ 设置 (Settings) ─────────────────────────────────────╮\x1b[0m`);
+      console.log(`\x1b[90m  │\x1b[0m  \x1b[32mmodel          \x1b[0m \x1b[2m${this.client.config.model}\x1b[0m`);
+      console.log(`\x1b[90m  │\x1b[0m  \x1b[32mreasoning      \x1b[0m \x1b[2m${this.client.config.reasoning_effort}\x1b[0m`);
+      console.log(`\x1b[90m  │\x1b[0m  \x1b[32mtemperature    \x1b[0m \x1b[2m${this.client.config.temperature}\x1b[0m`);
+      console.log(`\x1b[90m  │\x1b[0m  \x1b[32mmax_tokens     \x1b[0m \x1b[2m${this.client.config.max_tokens}\x1b[0m`);
+      console.log(`\x1b[90m  │\x1b[0m  \x1b[32mstream         \x1b[0m \x1b[2m${this.client.config.stream}\x1b[0m`);
+      console.log(`\x1b[90m  │\x1b[0m  \x1b[32mdiffusing      \x1b[0m \x1b[2m${this.client.config.diffusing}\x1b[0m`);
+      console.log(`\x1b[90m  │\x1b[0m  \x1b[32mapi_base       \x1b[0m \x1b[2m${this.client.baseURL}\x1b[0m`);
+      console.log(`\x1b[90m  │\x1b[0m  \x1b[32mapi_key        \x1b[0m \x1b[2m${this.client.apiKey ? this.client.apiKey.slice(0, 8) + "..." + this.client.apiKey.slice(-4) : "(not set)"}\x1b[0m`);
+      console.log(`\x1b[90m  │\x1b[0m  \x1b[32msupercompress  \x1b[0m \x1b[2m${this.superCompress ? "ON" : "OFF"}\x1b[0m`);
+      console.log(`\x1b[90m  │\x1b[0m  \x1b[32mcontextsearch  \x1b[0m \x1b[2m${this.contextSearchEnabled ? "ON" : "OFF"}\x1b[0m`);
+      console.log(`\x1b[1m\x1b[38;5;87m  ╰──────────────────────────────────────────────────────╯\x1b[0m`);
+      console.log("");
+      printInfo("用法: /settings <key> <value>");
+      printInfo("示例: /settings temperature 0.8");
+      printInfo("      /settings api_key sk_xxxx...");
+      printInfo("      /settings reasoning high");
+      console.log("");
+      return;
+    }
+
+    const value = args.slice(1).join(" ");
+    if (!value) {
+      printError(`请提供值。用法: /settings ${subCmd} <value>`);
+      return;
+    }
+
+    switch (subCmd) {
+      case "model":
+        this.client.config.model = value;
+        printSuccess(`model 已设为: ${value}`);
+        break;
+
+      case "reasoning":
+        if (!REASONING_LEVELS.includes(value)) {
+          printError(`无效级别 "${value}"。可选: ${REASONING_LEVELS.join(", ")}`);
+          return;
+        }
+        this.client.config.reasoning_effort = value;
+        printSuccess(`reasoning 已设为: ${value}`);
+        break;
+
+      case "temperature": {
+        const temp = parseFloat(value);
+        if (isNaN(temp) || temp < 0 || temp > 2) {
+          printError("temperature 必须是 0-2 之间的数字。");
+          return;
+        }
+        this.client.config.temperature = temp;
+        printSuccess(`temperature 已设为: ${temp}`);
+        break;
+      }
+
+      case "max_tokens": {
+        const tokens = parseInt(value, 10);
+        if (isNaN(tokens) || tokens < 1 || tokens > 50000) {
+          printError("max_tokens 必须是 1-50000 之间的整数。");
+          return;
+        }
+        this.client.config.max_tokens = tokens;
+        printSuccess(`max_tokens 已设为: ${tokens}`);
+        break;
+      }
+
+      case "stream":
+        this.client.config.stream = value === "true" || value === "on";
+        printSuccess(`stream 已设为: ${this.client.config.stream}`);
+        break;
+
+      case "diffusing":
+        this.client.config.diffusing = value === "true" || value === "on";
+        printSuccess(`diffusing 已设为: ${this.client.config.diffusing}`);
+        break;
+
+      case "api_base":
+        this.client.baseURL = value;
+        printSuccess(`api_base 已设为: ${value}`);
+        break;
+
+      case "api_key":
+        this.client.apiKey = value;
+        printSuccess(`api_key 已更新: ${value.slice(0, 8)}...${value.slice(-4)}`);
+        break;
+
+      case "supercompress":
+        this.superCompress = value === "true" || value === "on";
+        printSuccess(`supercompress 已设为: ${this.superCompress ? "ON" : "OFF"}`);
+        break;
+
+      case "contextsearch":
+        this.contextSearchEnabled = value === "true" || value === "on";
+        printSuccess(`contextsearch 已设为: ${this.contextSearchEnabled ? "ON" : "OFF"}`);
+        break;
+
+      default:
+        printError(
+          `未知设置项: ${subCmd}。可用: model, reasoning, temperature, max_tokens, ` +
+          `stream, diffusing, api_base, api_key, supercompress, contextsearch`
+        );
+    }
+  }
+
   // ── Graceful exit ─────────────────────────────────────────────────────────
 
   async _gracefulExit() {
@@ -535,6 +689,7 @@ export class MercuryRepl {
 
   _assembleStreamResponse(chunks) {
     let content = "";
+    let reasoning = "";
     const toolCallMap = {};
     let usage = null;
 
@@ -547,6 +702,10 @@ export class MercuryRepl {
       if (!delta) continue;
 
       if (delta.content) content += delta.content;
+
+      // Collect reasoning/thinking content (Mercury-2 chain-of-thought)
+      if (delta.reasoning_content) reasoning += delta.reasoning_content;
+      if (delta.reasoning) reasoning += delta.reasoning;
 
       if (delta.tool_calls) {
         for (const tc of delta.tool_calls) {
@@ -577,6 +736,6 @@ export class MercuryRepl {
     const tool_calls =
       indices.length > 0 ? indices.map((i) => toolCallMap[i]) : null;
 
-    return { content: content || null, tool_calls, usage };
+    return { content: content || null, reasoning: reasoning || null, tool_calls, usage };
   }
 }

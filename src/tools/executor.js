@@ -4,6 +4,15 @@ import http from 'node:http';
 import https from 'node:https';
 import path from 'node:path';
 import { SubAgent, runSubAgentTeam } from '../subagent.js';
+import { MercuryClient } from '../client.js';
+
+// ── Read tool token limit ────────────────────────────────────────────────────
+// ~35,000 tokens at ~3.5 chars/token = 122,500 chars
+const READ_MAX_CHARS = 122500;
+
+// ── ContextSearch constants ──────────────────────────────────────────────────
+// Read conversation log in chunks of ~100K tokens ≈ 350K chars
+const CONTEXT_SEARCH_CHUNK_CHARS = 350000;
 
 /**
  * Validate a git ref to prevent command injection.
@@ -136,6 +145,7 @@ export class ToolExecutor {
       fetch: '_fetch',
       subagent: '_subAgent',
       subagentteam: '_subAgentTeam',
+      contextsearch: '_contextSearch',
     };
 
     const handler = handlers[toolName.toLowerCase()];
@@ -183,6 +193,7 @@ export class ToolExecutor {
     }
 
     let lines = content.split('\n');
+    const totalLines = lines.length;
 
     // Apply offset (1-based)
     const startLine = offset && offset > 0 ? offset - 1 : 0;
@@ -193,6 +204,18 @@ export class ToolExecutor {
     // Apply limit
     if (limit && limit > 0) {
       lines = lines.slice(0, limit);
+    }
+
+    // Check token limit (~35,000 tokens ≈ 122,500 chars)
+    const selectedContent = lines.join('\n');
+    if (selectedContent.length > READ_MAX_CHARS) {
+      const estimatedTokens = Math.ceil(selectedContent.length / 3.5);
+      return (
+        `Error: Content too large (~${estimatedTokens} tokens, limit is ~35,000 tokens). ` +
+        `File has ${totalLines} lines total. ` +
+        `Use offset and limit parameters to read smaller portions. ` +
+        `Example: { "file_path": "${file_path}", "offset": 1, "limit": 500 }`
+      );
     }
 
     // Format with line numbers (cat -n format)
@@ -828,5 +851,138 @@ export class ToolExecutor {
     });
 
     return formatted.join('\n\n');
+  }
+
+  // ── ContextSearch ──────────────────────────────────────────────────────────
+
+  /**
+   * Search the complete conversation log using Mercury-2 as a reader agent.
+   * Reads .mercury/conversation.jsonl in chunks, asks the model to judge
+   * relevance and extract key content for each chunk.
+   *
+   * @param {object} args
+   * @param {string} args.query - What to search for
+   * @param {string} [args.scope] - 'recent', 'early', or 'all' (default)
+   * @returns {string} Compiled relevant findings
+   */
+  async _contextSearch(args) {
+    const { query, scope = 'all' } = args;
+    if (!query) return 'Error: query is required.';
+
+    // Locate the conversation log
+    const logPath = path.join(process.cwd(), '.mercury', 'conversation.jsonl');
+    let logContent;
+    try {
+      logContent = await readFile(logPath, 'utf-8');
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        return 'No conversation log found (.mercury/conversation.jsonl does not exist). Nothing to search.';
+      }
+      return `Error reading conversation log: ${err.message}`;
+    }
+
+    if (!logContent.trim()) {
+      return 'Conversation log is empty. Nothing to search.';
+    }
+
+    // Determine which portion of the log to scan based on scope
+    let targetContent = logContent;
+    if (scope === 'recent') {
+      const quarterPoint = Math.floor(logContent.length * 0.75);
+      targetContent = logContent.slice(quarterPoint);
+    } else if (scope === 'early') {
+      const quarterPoint = Math.floor(logContent.length * 0.25);
+      targetContent = logContent.slice(0, quarterPoint);
+    }
+
+    // Split into chunks of ~100K tokens (≈350K chars)
+    const chunks = [];
+    for (let i = 0; i < targetContent.length; i += CONTEXT_SEARCH_CHUNK_CHARS) {
+      chunks.push(targetContent.slice(i, i + CONTEXT_SEARCH_CHUNK_CHARS));
+    }
+
+    // Create a client for the search sub-agent
+    const client = new MercuryClient({
+      apiKey: this._clientOptions.apiKey,
+      baseURL: this._clientOptions.baseURL,
+    });
+
+    const findings = [];
+
+    // Process each chunk — ask Mercury-2 to judge relevance and extract
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+
+      const searchPrompt =
+        `You are a context search agent. Your job is to scan a portion of a conversation log and find content relevant to the user's query.\n\n` +
+        `## Query\n${query}\n\n` +
+        `## Instructions\n` +
+        `1. Read the conversation log chunk below carefully.\n` +
+        `2. If you find content relevant to the query, extract and return the key information verbatim (exact code, exact error messages, exact file paths, etc.).\n` +
+        `3. If nothing relevant is found, respond with exactly: NO_MATCH\n` +
+        `4. Be thorough — extract ALL relevant content, not just the first match.\n` +
+        `5. Preserve exact formatting of code snippets and error messages.\n\n` +
+        `## Conversation Log (chunk ${i + 1}/${chunks.length})\n` +
+        `\`\`\`\n${chunk}\n\`\`\``;
+
+      try {
+        const response = await client.chatCompletion(
+          [
+            { role: 'system', content: 'You are a precise context search agent. Extract relevant information from conversation logs.' },
+            { role: 'user', content: searchPrompt },
+          ],
+          {
+            max_tokens: 8000,
+            temperature: 0.2,
+            reasoning_effort: 'low',
+          }
+        );
+
+        const result = response.choices?.[0]?.message?.content;
+        if (result && !result.trim().startsWith('NO_MATCH')) {
+          findings.push(`── Chunk ${i + 1}/${chunks.length} ──\n${result.trim()}`);
+        }
+      } catch (err) {
+        // Non-critical: skip this chunk on error
+        findings.push(`── Chunk ${i + 1}/${chunks.length} ── (search error: ${err.message})`);
+      }
+    }
+
+    // Compile results
+    if (findings.length === 0) {
+      return (
+        `No relevant content found for query: "${query}"\n` +
+        `Searched ${chunks.length} chunk(s) of conversation log (scope: ${scope}).`
+      );
+    }
+
+    // If multiple findings, ask Mercury-2 to compile a summary
+    if (findings.length > 1) {
+      try {
+        const compilePrompt =
+          `You found the following relevant content from different parts of the conversation log.\n` +
+          `Compile these into a single coherent response for the query: "${query}"\n\n` +
+          `Remove duplicates. Preserve exact code, paths, and error messages. Be concise but complete.\n\n` +
+          findings.join('\n\n');
+
+        const compileResponse = await client.chatCompletion(
+          [
+            { role: 'system', content: 'Compile search results into a coherent summary. Preserve exact code and error messages.' },
+            { role: 'user', content: compilePrompt },
+          ],
+          { max_tokens: 8000, temperature: 0.2, reasoning_effort: 'low' }
+        );
+
+        const compiled = compileResponse.choices?.[0]?.message?.content;
+        if (compiled) {
+          return `[ContextSearch: scanned ${chunks.length} chunk(s), found ${findings.length} match(es)]\n\n${compiled}`;
+        }
+      } catch {
+        // Fall through to raw findings
+      }
+    }
+
+    // Return raw findings (single match or compile failed)
+    return `[ContextSearch: scanned ${chunks.length} chunk(s), found ${findings.length} match(es)]\n\n${findings.join('\n\n')}`;
   }
 }

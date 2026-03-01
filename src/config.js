@@ -1,7 +1,8 @@
 // Mercury Code - Configuration
 // Based on Mercury-2 diffusion model from Inception Labs
 
-export const MERCURY_API_BASE = "https://api.inceptionlabs.ai/v1";
+export const MERCURY_API_BASE =
+  process.env.MERCURY_API_BASE || "https://api.inceptionlabs.ai/v1";
 export const MERCURY_MODEL = "mercury-2";
 
 export const REASONING_LEVELS = ["instant", "low", "medium", "high"];

@@ -268,7 +268,7 @@ export class MercuryRepl {
           await this.log.append({
             role: "tool",
             name: fnName,
-            result_preview: String(result).slice(0, 500),
+            result: String(result),
           });
         }
 

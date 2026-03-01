@@ -1,6 +1,15 @@
 // Terminal display/rendering module for Mercury Code CLI
 // Uses only Node.js built-in modules with ANSI escape codes for colors
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PKG_VERSION = JSON.parse(
+  readFileSync(join(__dirname, "../../package.json"), "utf-8")
+).version;
+
 // ── Color Constants ──────────────────────────────────────────────────────────
 
 const RESET = "\x1b[0m";
@@ -22,7 +31,7 @@ export function printWelcome() {
   console.log(
     `${CYAN}${BOLD}` +
       `\n╔══════════════════════════════════════╗` +
-      `\n║         Mercury Code v1.0.0          ║` +
+      `\n║       Mercury Code v${PKG_VERSION.padEnd(13)}║` +
       `\n║   Powered by Mercury-2 Diffusion     ║` +
       `\n╚══════════════════════════════════════╝${RESET}\n`
   );
@@ -42,14 +51,6 @@ export function printHelp() {
   console.log(`  ${GREEN}/context${RESET}          - Show context window usage`);
   console.log(`  ${GREEN}/config${RESET}           - Show current config`);
   console.log(`  ${GREEN}/exit${RESET} or ${DIM}Ctrl+C${RESET}    - Exit\n`);
-}
-
-/**
- * Print assistant response text in white.
- * @param {string} text
- */
-export function printAssistantText(text) {
-  console.log(`\n${WHITE}${text}${RESET}\n`);
 }
 
 /**

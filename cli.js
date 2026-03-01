@@ -4,6 +4,14 @@
 // Interactive AI coding assistant powered by Mercury-2 from Inception Labs
 
 import { MercuryRepl } from "./src/repl.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PKG_VERSION = JSON.parse(
+  readFileSync(join(__dirname, "package.json"), "utf-8")
+).version;
 
 // ---------------------------------------------------------------------------
 // Argument parsing (zero dependencies)
@@ -35,7 +43,7 @@ Examples:
 }
 
 function printVersion() {
-  console.log("mercury-code v1.0.0");
+  console.log(`mercury-code v${PKG_VERSION}`);
 }
 
 let verbose = false;

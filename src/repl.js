@@ -55,8 +55,15 @@ export class MercuryRepl {
       prompt: "\x1b[32m\u276F \x1b[0m",
     });
 
+    this._processing = false;
     this._rl.on("line", async (line) => {
-      await this._handleInput(line);
+      if (this._processing) return; // prevent concurrent input handling
+      this._processing = true;
+      try {
+        await this._handleInput(line);
+      } finally {
+        this._processing = false;
+      }
     });
 
     this._rl.on("close", () => {
@@ -116,38 +123,47 @@ export class MercuryRepl {
   // ── Core loop: send to Mercury-2 and process the response ────────────────
 
   async _sendAndProcess() {
-    // Smart context compression before sending
-    await this.conversation.compress(this.client, this.memory, (msg) =>
-      printInfo(msg)
-    );
+    // Iterative agentic loop (avoids recursive call-stack growth)
+    while (true) {
+      // Smart context compression before sending
+      await this.conversation.compress(this.client, this.memory, (msg) =>
+        printInfo(msg)
+      );
 
-    spinner.start("Thinking...");
+      spinner.start("Thinking...");
 
-    try {
-      const chunks = [];
-      let firstChunk = true;
+      let response;
+      try {
+        const chunks = [];
+        let firstChunk = true;
 
-      for await (const chunk of this.client.chatCompletionStream(
-        this.conversation.getMessages(),
-        { tools: TOOL_DEFINITIONS }
-      )) {
-        if (firstChunk) {
-          spinner.stop();
-          firstChunk = false;
+        for await (const chunk of this.client.chatCompletionStream(
+          this.conversation.getMessages(),
+          { tools: TOOL_DEFINITIONS }
+        )) {
+          if (firstChunk) {
+            spinner.stop();
+            firstChunk = false;
+          }
+          chunks.push(chunk);
+
+          const delta = chunk.choices?.[0]?.delta;
+          if (delta?.content) printStreamChunk(delta.content);
         }
-        chunks.push(chunk);
 
-        const delta = chunk.choices?.[0]?.delta;
-        if (delta?.content) printStreamChunk(delta.content);
+        if (firstChunk) spinner.stop();
+
+        response = this._assembleStreamResponse(chunks);
+
+        if (response.content) printStreamEnd();
+
+        if (response.usage) this.conversation.updateUsage(response.usage);
+      } catch (err) {
+        spinner.stop();
+        printError(`API error: ${err.message}`);
+        if (this.verbose) console.error(err.stack);
+        return;
       }
-
-      if (firstChunk) spinner.stop();
-
-      const response = this._assembleStreamResponse(chunks);
-
-      if (response.content) printStreamEnd();
-
-      if (response.usage) this.conversation.updateUsage(response.usage);
 
       // ── Tool calls ──────────────────────────────────────────────────────
       if (response.tool_calls && response.tool_calls.length > 0) {
@@ -202,21 +218,18 @@ export class MercuryRepl {
           });
         }
 
-        await this._sendAndProcess();
-        return;
+        // Continue the while loop for the next model turn
+        continue;
       }
 
-      // ── Plain text response ──────────────────────────────────────────────
+      // ── Plain text response — exit the loop ──────────────────────────────
       this.conversation.addAssistantMessage(response.content || "");
       await this.log.append({
         role: "assistant",
         content: response.content,
       });
       if (response.usage) printTokenUsage(response.usage);
-    } catch (err) {
-      spinner.stop();
-      printError(`API error: ${err.message}`);
-      if (this.verbose) console.error(err.stack);
+      return;
     }
   }
 

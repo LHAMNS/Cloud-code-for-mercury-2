@@ -1,7 +1,7 @@
 // Mercury Code - Persistent Memory Manager
 // Manages .mercury/memory.md for long-term knowledge retention across compressions
 
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 
 const MEMORY_DIR = ".mercury";
@@ -88,8 +88,7 @@ export class ConversationLog {
     await mkdir(this.dir, { recursive: true });
     const line = JSON.stringify({ ts: Date.now(), ...message }) + "\n";
     try {
-      const existing = await readFile(this.filePath, "utf-8").catch(() => "");
-      await writeFile(this.filePath, existing + line, "utf-8");
+      await appendFile(this.filePath, line, "utf-8");
     } catch {
       // non-critical
     }

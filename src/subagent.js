@@ -1,24 +1,33 @@
 // Mercury Code - SubAgent System
 // Enables the main agent to spawn isolated sub-agents for parallel tasks.
-// Each sub-agent has its own conversation context and can use all tools.
+// Sub-agents have their own conversation context and can use core tools
+// (but NOT SubAgent/SubAgentTeam to prevent infinite recursion).
 
 import { MercuryClient } from "./client.js";
 import { TOOL_DEFINITIONS } from "./tools/definitions.js";
 import { ToolExecutor } from "./tools/executor.js";
 import { buildSystemPrompt } from "./system-prompt.js";
+import { estimateMessagesTokens } from "./context.js";
+import { MODEL_LIMITS } from "./config.js";
 
 // Maximum tool turns per sub-agent (more conservative than main agent)
 const MAX_SUB_TURNS = 30;
 // Maximum concurrent sub-agents
 const MAX_CONCURRENT = 5;
+// Sub-agents cannot spawn further sub-agents — filter these out
+const SUB_AGENT_TOOLS = TOOL_DEFINITIONS.filter(
+  (t) => !["SubAgent", "SubAgentTeam"].includes(t.function.name)
+);
+// Max context tokens for a sub-agent before stopping (80% of model limit)
+const SUB_AGENT_CTX_LIMIT = Math.floor(MODEL_LIMITS.max_context_tokens * 0.8);
 
 // Track running sub-agents globally for concurrency control
 let runningCount = 0;
 
 /**
  * SubAgent: an isolated agent with its own conversation context.
- * It can call all the same tools as the main agent, but has a separate
- * context window. Results are returned to the main agent.
+ * It can call core tools (Read, Write, Edit, Bash, Glob, Grep) but NOT
+ * SubAgent/SubAgentTeam to prevent infinite recursion.
  */
 export class SubAgent {
   /**
@@ -33,7 +42,11 @@ export class SubAgent {
       apiKey: options.apiKey,
       baseURL: options.baseURL,
     });
-    this.toolExecutor = new ToolExecutor();
+    // Pass credentials down so sub-agent tools work correctly
+    this.toolExecutor = new ToolExecutor({
+      apiKey: options.apiKey,
+      baseURL: options.baseURL,
+    });
     this.messages = [];
     this._turnCount = 0;
   }
@@ -62,7 +75,8 @@ export class SubAgent {
       buildSystemPrompt(process.cwd()) +
       `\n## Sub-Agent Context\n\nYou are a sub-agent spawned by the main agent to handle a specific task. ` +
       `Focus exclusively on completing the assigned task. Be thorough but concise in your final response. ` +
-      `Return only the relevant findings or results — the main agent will use your output to continue its work.\n`;
+      `Return only the relevant findings or results — the main agent will use your output to continue its work.\n` +
+      `Note: You have access to core tools (Read, Write, Edit, Bash, Glob, Grep) but cannot spawn further sub-agents.\n`;
 
     this.messages = [
       { role: "system", content: systemPrompt },
@@ -73,12 +87,24 @@ export class SubAgent {
     while (this._turnCount < MAX_SUB_TURNS) {
       this._turnCount++;
 
+      // Guard: check if sub-agent context is getting too large
+      const ctxTokens = estimateMessagesTokens(this.messages);
+      if (ctxTokens > SUB_AGENT_CTX_LIMIT) {
+        const lastAssistant = [...this.messages]
+          .reverse()
+          .find((m) => m.role === "assistant" && m.content);
+        return (
+          lastAssistant?.content ||
+          "(sub-agent stopped: context limit reached)"
+        );
+      }
+
       let response;
       try {
         response = await this.client.chatCompletion(this.messages, {
-          tools: TOOL_DEFINITIONS,
-          max_tokens: 16000, // Sub-agents get smaller output budget
-          reasoning_effort: "low", // Faster reasoning for sub-tasks
+          tools: SUB_AGENT_TOOLS, // Core tools only — no SubAgent recursion
+          max_tokens: 16000,
+          reasoning_effort: "low",
         });
       } catch (err) {
         return `Sub-agent API error: ${err.message}`;
@@ -130,11 +156,13 @@ export class SubAgent {
     }
 
     // Reached max turns
-    // Try to extract whatever content we have from the last assistant message
     const lastAssistant = [...this.messages]
       .reverse()
       .find((m) => m.role === "assistant" && m.content);
-    return lastAssistant?.content || "(sub-agent reached maximum turns without a final response)";
+    return (
+      lastAssistant?.content ||
+      "(sub-agent reached maximum turns without a final response)"
+    );
   }
 }
 
@@ -146,7 +174,8 @@ export class SubAgent {
  */
 export async function runSubAgentTeam(tasks, options = {}) {
   const agents = tasks.map(
-    (t) => new SubAgent({ task: typeof t === "string" ? t : t.task, ...options })
+    (t) =>
+      new SubAgent({ task: typeof t === "string" ? t : t.task, ...options })
   );
 
   // Run all agents concurrently

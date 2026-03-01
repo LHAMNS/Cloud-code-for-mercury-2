@@ -1,7 +1,6 @@
 import { readFile, writeFile, mkdir, readdir, stat } from 'node:fs/promises';
-import { execSync, spawn } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import path from 'node:path';
-import os from 'node:os';
 import { SubAgent, runSubAgentTeam } from '../subagent.js';
 
 /**
@@ -38,7 +37,7 @@ async function glob(pattern, baseDir = '.') {
 
 /**
  * Convert a glob pattern to a regular expression.
- * Supports *, **, and ? wildcards.
+ * Supports *, **, ?, and {a,b,c} brace expansion.
  */
 function globToRegex(pattern) {
   let regexStr = '';
@@ -49,7 +48,6 @@ function globToRegex(pattern) {
 
     if (ch === '*') {
       if (pattern[i + 1] === '*') {
-        // ** matches any number of directories (including zero)
         if (pattern[i + 2] === '/') {
           regexStr += '(?:.+/)?';
           i += 3;
@@ -58,17 +56,30 @@ function globToRegex(pattern) {
           i += 2;
         }
       } else {
-        // * matches anything except path separator
         regexStr += '[^/]*';
         i += 1;
       }
     } else if (ch === '?') {
       regexStr += '[^/]';
       i += 1;
+    } else if (ch === '{') {
+      // Brace expansion: {a,b,c} → (a|b|c)
+      const closeBrace = pattern.indexOf('}', i);
+      if (closeBrace !== -1) {
+        const inner = pattern.slice(i + 1, closeBrace);
+        const alternatives = inner.split(',').map((alt) =>
+          alt.replace(/[.*+?^$|\\()[\]]/g, '\\$&')
+        );
+        regexStr += '(' + alternatives.join('|') + ')';
+        i = closeBrace + 1;
+      } else {
+        regexStr += '\\{';
+        i += 1;
+      }
     } else if (ch === '.') {
       regexStr += '\\.';
       i += 1;
-    } else if (ch === '(' || ch === ')' || ch === '{' || ch === '}' ||
+    } else if (ch === '(' || ch === ')' || ch === '}' ||
                ch === '[' || ch === ']' || ch === '+' || ch === '^' ||
                ch === '$' || ch === '|' || ch === '\\') {
       regexStr += '\\' + ch;
@@ -309,7 +320,7 @@ export class ToolExecutor {
         maxBuffer: 10 * 1024 * 1024, // 10 MB
         stdio: ['pipe', 'pipe', 'pipe'],
         shell: true,
-        env: { ...process.env, HOME: os.homedir() },
+        env: process.env,
       });
       return result || '(command completed with no output)';
     } catch (err) {
@@ -472,7 +483,7 @@ export class ToolExecutor {
     // Skip common non-code directories
     const skipDirs = new Set([
       'node_modules', '.git', '.svn', '.hg',
-      '__pycache__', '.DS_Store', 'dist', '.next',
+      '__pycache__', 'dist', '.next',
       'coverage', '.cache', '.vscode', '.idea',
     ]);
 
@@ -490,7 +501,7 @@ export class ToolExecutor {
       const fullPath = path.join(dirPath, entry.name);
 
       if (entry.isDirectory()) {
-        if (!skipDirs.has(entry.name) && !entry.name.startsWith('.')) {
+        if (!skipDirs.has(entry.name)) {
           await this._grepDirectory(fullPath, regex, includeRegex, results, maxResults);
         }
       } else if (entry.isFile()) {

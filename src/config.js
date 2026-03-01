@@ -27,14 +27,11 @@ export const MODEL_LIMITS = {
 export function getApiKey() {
   const key = process.env.INCEPTION_API_KEY;
   if (!key) {
-    console.error(
-      "\x1b[31mError: INCEPTION_API_KEY environment variable is required.\x1b[0m"
+    throw new Error(
+      "INCEPTION_API_KEY environment variable is required.\n" +
+        "Get your API key from https://api.inceptionlabs.ai and set it:\n" +
+        "  export INCEPTION_API_KEY=your_key_here"
     );
-    console.error(
-      "Get your API key from https://api.inceptionlabs.ai and set it:"
-    );
-    console.error("  export INCEPTION_API_KEY=your_key_here");
-    process.exit(1);
   }
   return key;
 }

@@ -5,8 +5,6 @@ import { MODEL_LIMITS } from "./config.js";
 
 // When to trigger compression (fraction of max context)
 const COMPRESS_THRESHOLD = 0.60;
-// Target after compression
-const TARGET_AFTER_COMPRESS = 0.30;
 // How many recent messages are always kept verbatim
 const PROTECTED_RECENT = 6;
 

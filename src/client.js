@@ -129,19 +129,24 @@ export class MercuryClient {
     req.end();
 
     // Async iteration: pull from queue or wait for next enqueue
-    while (true) {
-      if (queue.length > 0) {
-        yield queue.shift();
-      } else if (done) {
-        if (error) throw error;
-        return;
-      } else {
-        const result = await new Promise((r) => {
-          resolve = r;
-        });
-        if (result.done) return;
-        yield result.value;
+    try {
+      while (true) {
+        if (queue.length > 0) {
+          yield queue.shift();
+        } else if (done) {
+          if (error) throw error;
+          return;
+        } else {
+          const result = await new Promise((r) => {
+            resolve = r;
+          });
+          if (result.done) return;
+          yield result.value;
+        }
       }
+    } finally {
+      // Ensure the request is destroyed if the consumer stops early
+      req.destroy();
     }
   }
 
@@ -161,10 +166,10 @@ export class MercuryClient {
     const body = {
       model: options.model || this.config.model,
       messages: sanitized,
-      max_tokens: options.max_tokens || this.config.max_tokens,
-      temperature: options.temperature || this.config.temperature,
+      max_tokens: options.max_tokens ?? this.config.max_tokens,
+      temperature: options.temperature ?? this.config.temperature,
       reasoning_effort:
-        options.reasoning_effort || this.config.reasoning_effort,
+        options.reasoning_effort ?? this.config.reasoning_effort,
       reasoning_summary:
         options.reasoning_summary ?? this.config.reasoning_summary,
     };

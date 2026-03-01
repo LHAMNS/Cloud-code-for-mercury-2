@@ -1,5 +1,7 @@
 import { readFile, writeFile, mkdir, readdir, stat } from 'node:fs/promises';
 import { execSync } from 'node:child_process';
+import http from 'node:http';
+import https from 'node:https';
 import path from 'node:path';
 import { SubAgent, runSubAgentTeam } from '../subagent.js';
 
@@ -115,9 +117,13 @@ export class ToolExecutor {
       read: '_readFile',
       write: '_writeFile',
       edit: '_editFile',
+      patch: '_patchFile',
       bash: '_bash',
       glob: '_glob',
       grep: '_grep',
+      listdir: '_listDir',
+      diff: '_diff',
+      fetch: '_fetch',
       subagent: '_subAgent',
       subagentteam: '_subAgentTeam',
     };
@@ -528,6 +534,261 @@ export class ToolExecutor {
 
     const agent = new SubAgent({ task, ...this._clientOptions });
     return await agent.run();
+  }
+
+  // ── New Tools ────────────────────────────────────────────────────────────
+
+  /**
+   * Apply multiple edits to a file in a single operation.
+   */
+  async _patchFile(args) {
+    const { file_path, edits } = args;
+    if (!file_path) return 'Error: file_path is required.';
+    if (!edits || !Array.isArray(edits) || edits.length === 0) {
+      return 'Error: edits array is required and must not be empty.';
+    }
+
+    let content;
+    try {
+      content = await readFile(file_path, 'utf-8');
+    } catch (err) {
+      if (err.code === 'ENOENT') return `Error: File not found: ${file_path}`;
+      return `Error reading file: ${err.message}`;
+    }
+
+    let applied = 0;
+    const errors = [];
+
+    for (let i = 0; i < edits.length; i++) {
+      const { old_string, new_string } = edits[i];
+      if (old_string === undefined || new_string === undefined) {
+        errors.push(`Edit ${i + 1}: missing old_string or new_string`);
+        continue;
+      }
+      const idx = content.indexOf(old_string);
+      if (idx === -1) {
+        errors.push(`Edit ${i + 1}: old_string not found`);
+        continue;
+      }
+      content = content.substring(0, idx) + new_string + content.substring(idx + old_string.length);
+      applied++;
+    }
+
+    try {
+      await writeFile(file_path, content, 'utf-8');
+    } catch (err) {
+      return `Error writing file: ${err.message}`;
+    }
+
+    let result = `Applied ${applied}/${edits.length} edits to ${file_path}`;
+    if (errors.length > 0) {
+      result += `\nWarnings:\n${errors.join('\n')}`;
+    }
+    return result;
+  }
+
+  /**
+   * List directory contents with tree-like format.
+   */
+  async _listDir(args) {
+    const dirPath = args.path || process.cwd();
+    const maxDepth = Math.min(args.max_depth || 1, 5);
+    const showHidden = args.show_hidden || false;
+
+    try {
+      await stat(dirPath);
+    } catch (err) {
+      if (err.code === 'ENOENT') return `Error: Directory not found: ${dirPath}`;
+      return `Error: ${err.message}`;
+    }
+
+    const lines = [];
+    await this._listDirRecursive(dirPath, '', maxDepth, 0, showHidden, lines);
+
+    if (lines.length === 0) return '(empty directory)';
+    return lines.join('\n');
+  }
+
+  async _listDirRecursive(dirPath, prefix, maxDepth, depth, showHidden, lines) {
+    if (depth >= maxDepth) return;
+
+    let entries;
+    try {
+      entries = await readdir(dirPath, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    // Sort: dirs first, then files, alphabetical
+    entries.sort((a, b) => {
+      if (a.isDirectory() && !b.isDirectory()) return -1;
+      if (!a.isDirectory() && b.isDirectory()) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    // Filter hidden if needed
+    if (!showHidden) {
+      entries = entries.filter((e) => !e.name.startsWith('.'));
+    }
+
+    const skipDirs = new Set(['node_modules', '.git', '__pycache__', 'dist', '.next', 'coverage']);
+
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      const isLast = i === entries.length - 1;
+      const connector = isLast ? '└── ' : '├── ';
+      const childPrefix = isLast ? '    ' : '│   ';
+
+      if (entry.isDirectory()) {
+        const skip = skipDirs.has(entry.name);
+        lines.push(`${prefix}${connector}📁 ${entry.name}/${skip ? ' (skipped)' : ''}`);
+        if (!skip) {
+          const fullPath = path.join(dirPath, entry.name);
+          await this._listDirRecursive(fullPath, prefix + childPrefix, maxDepth, depth + 1, showHidden, lines);
+        }
+      } else {
+        // Get file size
+        let size = '';
+        try {
+          const s = await stat(path.join(dirPath, entry.name));
+          size = this._formatSize(s.size);
+        } catch {
+          // skip size
+        }
+        lines.push(`${prefix}${connector}${entry.name} ${size}`);
+      }
+    }
+  }
+
+  _formatSize(bytes) {
+    if (bytes < 1024) return `(${bytes}B)`;
+    if (bytes < 1024 * 1024) return `(${(bytes / 1024).toFixed(1)}KB)`;
+    return `(${(bytes / (1024 * 1024)).toFixed(1)}MB)`;
+  }
+
+  /**
+   * Show file or git diffs.
+   */
+  async _diff(args) {
+    const { file_a, file_b, git_ref } = args;
+
+    // Case 1: git diff against a ref
+    if (git_ref && !file_a && !file_b) {
+      try {
+        const result = execSync(`git diff ${git_ref}`, {
+          encoding: 'utf-8',
+          timeout: 30000,
+          maxBuffer: 5 * 1024 * 1024,
+        });
+        return result || '(no changes)';
+      } catch (err) {
+        return `Error: ${err.message}`;
+      }
+    }
+
+    // Case 2: git diff for a specific file
+    if (file_a && !file_b) {
+      try {
+        const ref = git_ref || 'HEAD';
+        const result = execSync(`git diff ${ref} -- "${file_a}"`, {
+          encoding: 'utf-8',
+          timeout: 30000,
+          maxBuffer: 5 * 1024 * 1024,
+        });
+        return result || `(no changes for ${file_a})`;
+      } catch (err) {
+        return `Error: ${err.message}`;
+      }
+    }
+
+    // Case 3: diff between two files
+    if (file_a && file_b) {
+      try {
+        const result = execSync(`diff -u "${file_a}" "${file_b}"`, {
+          encoding: 'utf-8',
+          timeout: 30000,
+          maxBuffer: 5 * 1024 * 1024,
+        });
+        return result || '(files are identical)';
+      } catch (err) {
+        // diff returns exit code 1 when files differ
+        if (err.stdout) return err.stdout;
+        return `Error: ${err.message}`;
+      }
+    }
+
+    // Case 4: no args → show all uncommitted changes
+    try {
+      const result = execSync('git diff', {
+        encoding: 'utf-8',
+        timeout: 30000,
+        maxBuffer: 5 * 1024 * 1024,
+      });
+      return result || '(no uncommitted changes)';
+    } catch (err) {
+      return `Error: ${err.message}`;
+    }
+  }
+
+  /**
+   * Fetch content from a URL via HTTP/HTTPS.
+   */
+  async _fetch(args) {
+    const { url, method = 'GET', headers = {}, body } = args;
+
+    if (!url) return 'Error: url is required.';
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      return 'Error: url must start with http:// or https://';
+    }
+
+    return new Promise((resolve) => {
+      const parsedUrl = new URL(url);
+      const lib = parsedUrl.protocol === 'https:' ? https : http;
+
+      const options = {
+        method: method.toUpperCase(),
+        hostname: parsedUrl.hostname,
+        port: parsedUrl.port,
+        path: parsedUrl.pathname + parsedUrl.search,
+        headers: {
+          'User-Agent': 'MercuryCode/1.0',
+          ...headers,
+        },
+        timeout: 30000,
+      };
+
+      const req = lib.request(options, (res) => {
+        // Handle redirects
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          resolve(`Redirect to: ${res.headers.location} (${res.statusCode})`);
+          return;
+        }
+
+        let data = '';
+        res.on('data', (chunk) => (data += chunk.toString()));
+        res.on('end', () => {
+          if (res.statusCode >= 400) {
+            resolve(`HTTP ${res.statusCode}: ${data.slice(0, 2000)}`);
+          } else {
+            // Truncate very large responses
+            if (data.length > 50000) {
+              resolve(data.slice(0, 50000) + `\n... (truncated, ${data.length} total bytes)`);
+            } else {
+              resolve(data);
+            }
+          }
+        });
+      });
+
+      req.on('error', (err) => resolve(`Error: ${err.message}`));
+      req.on('timeout', () => {
+        req.destroy();
+        resolve('Error: Request timed out (30s)');
+      });
+
+      if (body) req.write(body);
+      req.end();
+    });
   }
 
   /**

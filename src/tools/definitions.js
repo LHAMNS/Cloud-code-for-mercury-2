@@ -282,15 +282,177 @@ const SubAgentTeamTool = {
 };
 
 /**
+ * List the contents of a directory with optional depth control.
+ */
+const ListDirTool = {
+  type: "function",
+  function: {
+    name: "ListDir",
+    description:
+      "List the contents of a directory. Returns file and subdirectory names, sizes, " +
+      "and types in a tree-like format. Useful for understanding project structure. " +
+      "Use max_depth to control recursion depth (default 1 = immediate children only).",
+    parameters: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description:
+            "The absolute path to the directory to list. " +
+            "Defaults to the current working directory if not specified.",
+        },
+        max_depth: {
+          type: "number",
+          description:
+            "Maximum depth to recurse into subdirectories. " +
+            "1 = immediate children only (default), 2 = one level of subdirs, etc. Max 5.",
+        },
+        show_hidden: {
+          type: "boolean",
+          description:
+            "If true, include hidden files/directories (starting with '.'). Default is false.",
+        },
+      },
+      required: [],
+    },
+  },
+};
+
+/**
+ * Show the diff between two files or git changes.
+ */
+const DiffTool = {
+  type: "function",
+  function: {
+    name: "Diff",
+    description:
+      "Show differences between files or git changes. " +
+      "Can compare two files, show git diff for uncommitted changes, " +
+      "or show diff between two git refs (commits/branches). " +
+      "Returns unified diff format output.",
+    parameters: {
+      type: "object",
+      properties: {
+        file_a: {
+          type: "string",
+          description:
+            "Path to the first file, or a git ref (e.g., HEAD, branch name). " +
+            "If only file_a is given, shows git diff for that file's uncommitted changes.",
+        },
+        file_b: {
+          type: "string",
+          description:
+            "Path to the second file, or a git ref. " +
+            "When comparing two files, this is the 'new' version.",
+        },
+        git_ref: {
+          type: "string",
+          description:
+            "Git ref to diff against (e.g., 'HEAD', 'main', 'HEAD~3'). " +
+            "If specified without file_a/file_b, shows all changes since that ref.",
+        },
+      },
+      required: [],
+    },
+  },
+};
+
+/**
+ * Fetch content from a URL.
+ */
+const FetchTool = {
+  type: "function",
+  function: {
+    name: "Fetch",
+    description:
+      "Fetch content from a URL via HTTP/HTTPS. Returns the response body as text. " +
+      "Useful for downloading documentation, checking API endpoints, " +
+      "fetching remote configuration files, or reading web pages. " +
+      "Follows redirects automatically. Timeout is 30 seconds.",
+    parameters: {
+      type: "object",
+      properties: {
+        url: {
+          type: "string",
+          description: "The URL to fetch (must start with http:// or https://).",
+        },
+        method: {
+          type: "string",
+          description:
+            "HTTP method to use. Defaults to GET. Supports GET, POST, PUT, DELETE.",
+        },
+        headers: {
+          type: "object",
+          description:
+            "Optional HTTP headers as key-value pairs (e.g., {\"Authorization\": \"Bearer ...\"}).",
+        },
+        body: {
+          type: "string",
+          description: "Optional request body for POST/PUT requests.",
+        },
+      },
+      required: ["url"],
+    },
+  },
+};
+
+/**
+ * Apply a multi-region patch to a file efficiently.
+ */
+const PatchTool = {
+  type: "function",
+  function: {
+    name: "Patch",
+    description:
+      "Apply multiple edits to a file in a single operation. " +
+      "More efficient than calling Edit multiple times for the same file. " +
+      "Each edit specifies an old_string to find and a new_string to replace it with. " +
+      "All edits are applied in order.",
+    parameters: {
+      type: "object",
+      properties: {
+        file_path: {
+          type: "string",
+          description: "The absolute path to the file to patch.",
+        },
+        edits: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              old_string: {
+                type: "string",
+                description: "Exact text to find.",
+              },
+              new_string: {
+                type: "string",
+                description: "Text to replace it with.",
+              },
+            },
+            required: ["old_string", "new_string"],
+          },
+          description: "Array of {old_string, new_string} pairs to apply in order.",
+        },
+      },
+      required: ["file_path", "edits"],
+    },
+  },
+};
+
+/**
  * Complete list of tool definitions in OpenAI function calling format.
  */
 export const TOOL_DEFINITIONS = [
   ReadTool,
   WriteTool,
   EditTool,
+  PatchTool,
   BashTool,
   GlobTool,
   GrepTool,
+  ListDirTool,
+  DiffTool,
+  FetchTool,
   SubAgentTool,
   SubAgentTeamTool,
 ];

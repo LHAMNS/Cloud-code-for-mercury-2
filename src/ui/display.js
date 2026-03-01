@@ -48,6 +48,7 @@ export function printHelp() {
   console.log(`  ${GREEN}/help${RESET}             - Show this help message`);
   console.log(`  ${GREEN}/clear${RESET}            - Clear conversation`);
   console.log(`  ${GREEN}/reasoning <level>${RESET} - Set reasoning effort (instant/low/medium/high)`);
+  console.log(`  ${GREEN}/supercompress${RESET}    - Toggle aggressive context compression (on/off)`);
   console.log(`  ${GREEN}/context${RESET}          - Show context window usage`);
   console.log(`  ${GREEN}/config${RESET}           - Show current config`);
   console.log(`  ${GREEN}/exit${RESET} or ${DIM}Ctrl+C${RESET}    - Exit\n`);

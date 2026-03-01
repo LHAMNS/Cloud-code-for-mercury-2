@@ -37,6 +37,7 @@ export class MercuryRepl {
     this.log = new ConversationLog(process.cwd());
     this.conversation = new Conversation(buildSystemPrompt(process.cwd()));
     this.verbose = options.verbose || false;
+    this.superCompress = false; // /supercompress toggle
     this._rl = null;
     this._toolTurnCount = 0;
   }
@@ -126,8 +127,10 @@ export class MercuryRepl {
     // Iterative agentic loop (avoids recursive call-stack growth)
     while (true) {
       // Smart context compression before sending
-      await this.conversation.compress(this.client, this.memory, (msg) =>
-        printInfo(msg)
+      await this.conversation.compress(
+        this.client, this.memory,
+        (msg) => printInfo(msg),
+        this.superCompress
       );
 
       spinner.start("Thinking...");
@@ -271,11 +274,24 @@ export class MercuryRepl {
         printInfo(`Reasoning effort set to: ${level}`);
         break;
       }
+      case "/supercompress":
+        this.superCompress = !this.superCompress;
+        if (this.superCompress) {
+          printInfo(
+            "Super compress: ON — aggressive context compression enabled. " +
+              "Context will be compressed at 25% capacity. " +
+              "Full conversation log remains in .mercury/conversation.jsonl."
+          );
+        } else {
+          printInfo("Super compress: OFF — using normal compression (60% threshold).");
+        }
+        break;
       case "/context":
         printInfo(`Context usage: ${this.conversation.getUsagePercent()}`);
         printInfo(`Messages: ${this.conversation.messages.length}`);
         printInfo(`Memory file: ${this.memory.filePath}`);
         printInfo(`Conversation log: ${this.log.filePath}`);
+        printInfo(`Super compress: ${this.superCompress ? "ON" : "OFF"}`);
         break;
       case "/exit":
         printInfo("Goodbye!");

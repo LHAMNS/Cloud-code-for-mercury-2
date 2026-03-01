@@ -46,6 +46,8 @@ You have a persistent memory system in the \`.mercury/\` directory:
 
 When context gets compressed, important information is saved to memory automatically. You can also reference the conversation log to recover details that were compressed away.
 
+If **super compress** mode is enabled (\`/supercompress\`), compression is much more aggressive — only the current task and most recent exchange are kept. Always check \`.mercury/conversation.jsonl\` if you need details that were compressed away.
+
 ## Environment
 
 - Working directory: ${cwd}

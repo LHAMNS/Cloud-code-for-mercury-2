@@ -5,8 +5,12 @@ import { MODEL_LIMITS } from "./config.js";
 
 // When to trigger compression (fraction of max context)
 const COMPRESS_THRESHOLD = 0.60;
+// Super compress triggers much earlier
+const SUPER_COMPRESS_THRESHOLD = 0.25;
 // How many recent messages are always kept verbatim
 const PROTECTED_RECENT = 6;
+// Super compress keeps fewer messages
+const SUPER_PROTECTED_RECENT = 2;
 
 /**
  * Estimate tokens from a string. ~3.5 chars per token for mixed content.
@@ -146,8 +150,101 @@ export async function compressContext(
   );
 }
 
+/**
+ * Super Compress — aggressive model-driven context compression.
+ *
+ * The model itself decides what is essential vs. expendable. Only the most
+ * recent user-assistant exchange is kept verbatim. Everything else is
+ * compressed into a tight summary. Full conversation remains in
+ * .mercury/conversation.jsonl as a safety net.
+ *
+ * Triggers earlier (25% capacity) and compresses harder than normal mode.
+ */
+export async function superCompressContext(
+  messages,
+  systemPrompt,
+  client,
+  memory,
+  onInfo
+) {
+  const maxTokens = MODEL_LIMITS.max_context_tokens;
+  const systemTokens = estimateTokens(systemPrompt) + 4;
+  const currentTokens = systemTokens + estimateMessagesTokens(messages);
+  const usage = currentTokens / maxTokens;
+
+  if (usage < SUPER_COMPRESS_THRESHOLD) return;
+
+  // Keep only the most recent exchange (last 2 messages + any trailing tool pairs)
+  let protectedCount = Math.min(SUPER_PROTECTED_RECENT, messages.length);
+  let cutoff = messages.length - protectedCount;
+
+  // Don't split tool pairs
+  while (cutoff > 0 && messages[cutoff]?.role === "tool") {
+    cutoff--;
+    protectedCount++;
+  }
+
+  if (cutoff <= 1) return;
+
+  const oldMessages = messages.slice(0, cutoff);
+  const tokensBefore = estimateMessagesTokens(oldMessages);
+
+  onInfo(
+    `🔥 Super compress at ${(usage * 100).toFixed(0)}% — compressing ${oldMessages.length} messages (~${tokensBefore} tokens)...`
+  );
+
+  const recap = buildRecapForSummarization(oldMessages);
+  let summary = null;
+  let memoryEntry = null;
+
+  if (client) {
+    try {
+      const response = await client.chatCompletion(
+        [
+          { role: "system", content: SUPER_COMPRESS_PROMPT },
+          { role: "user", content: recap },
+        ],
+        { max_tokens: 1500, temperature: 0.5, reasoning_effort: "medium" }
+      );
+
+      const raw = response.choices?.[0]?.message?.content;
+      if (raw) {
+        const parts = parseSummaryResponse(raw);
+        summary = parts.summary;
+        memoryEntry = parts.memory;
+      }
+    } catch (err) {
+      onInfo(`Super compress API call failed (${err.message}), using fallback`);
+    }
+  }
+
+  if (!summary) {
+    summary = buildFallbackSummary(oldMessages);
+  }
+
+  if (memory && memoryEntry) {
+    try {
+      await memory.append(memoryEntry);
+    } catch {
+      // non-critical
+    }
+  }
+
+  const summaryMsg = {
+    role: "user",
+    content: `[Super compressed — ${oldMessages.length} messages → summary]\n\n${summary}\n\n(Full conversation log available in .mercury/conversation.jsonl)`,
+  };
+  messages.splice(0, cutoff, summaryMsg);
+
+  const tokensAfter = estimateMessagesTokens(messages);
+  const saved = tokensBefore - estimateMessagesTokens([summaryMsg]);
+  onInfo(
+    `🔥 Super compressed: ${oldMessages.length} → 1 summary. Saved ~${saved} tokens. Now at ${((systemTokens + tokensAfter) / maxTokens * 100).toFixed(0)}% capacity.`
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
-// Summarization prompt
+// Summarization prompts
 // ═══════════════════════════════════════════════════════════════════════════
 
 const SUMMARIZE_SYSTEM_PROMPT = `You are a conversation compressor. Given a work log of an AI coding assistant session, produce two sections:
@@ -169,6 +266,26 @@ Key facts to remember long-term (max 150 words). Include:
 - User preferences observed
 
 Format each section with the exact headers shown above. Be concise — every word counts.`;
+
+const SUPER_COMPRESS_PROMPT = `You are an aggressive context compressor. Your job is to compress an AI coding session into the absolute minimum needed to continue working.
+
+## SUMMARY
+Maximum 100 words. Only include:
+- What the current task is (1 sentence)
+- What files exist and their state (paths only, e.g. "Created: /src/app.js, /src/config.js")
+- What is done vs. still pending (1-2 sentences)
+- Any blocking errors (if any)
+
+Omit: tool call details, intermediate steps, file contents, verbose explanations.
+If a task is fully completed, just say "Done: [task]" — no need to list every step.
+
+## MEMORY
+Maximum 100 words. Only critical facts:
+- File paths and what they do
+- Key config values or architecture decisions
+- User preferences
+
+Format with exact headers above. Every word must earn its place.`;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Recap builder: convert messages into readable work log for the model

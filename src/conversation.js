@@ -3,7 +3,7 @@
  * Manages chat history, memory integration, and context compression.
  */
 
-import { estimateTokens, estimateMessagesTokens, compressContext } from "./context.js";
+import { estimateTokens, estimateMessagesTokens, compressContext, superCompressContext } from "./context.js";
 import { MODEL_LIMITS } from "./config.js";
 
 export class Conversation {
@@ -78,9 +78,13 @@ export class Conversation {
    * @param {object} memory - MemoryManager for persistent storage
    * @param {Function} onInfo - info callback
    */
-  async compress(client, memory, onInfo) {
+  async compress(client, memory, onInfo, superMode = false) {
     const fullSystemPrompt = this.systemPrompt + (this._memoryContent || "");
-    await compressContext(this.messages, fullSystemPrompt, client, memory, onInfo);
+    if (superMode) {
+      await superCompressContext(this.messages, fullSystemPrompt, client, memory, onInfo);
+    } else {
+      await compressContext(this.messages, fullSystemPrompt, client, memory, onInfo);
+    }
     // Reload memory after compression (it may have been updated)
     if (memory) {
       this._memoryContent = await memory.read();

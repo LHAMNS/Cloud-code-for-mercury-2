@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>大象牙膏 3D 物理模拟</title>
+<style>
+  body { margin:0; overflow:hidden; background:#202030; }
+  canvas { display:block; }
+</style>
+</head>
+<body>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ------------------------------------------------------------
+// 1️⃣ 基础 Three.js 场景、相机、渲染器
+// ------------------------------------------------------------
+const scene   = new THREE.Scene();
+scene.background = new THREE.Color(0x202030);
+
+const camera  = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 100);
+camera.position.set(0, 2, 6);
+scene.add(camera);
+
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+// ------------------------------------------------------------
+// 2️⃣ 光照
+// ------------------------------------------------------------
+const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+dirLight.position.set(5, 8, 5);
+dirLight.castShadow = true;
+dirLight.shadow.mapSize.set(1024,1024);
+dirLight.shadow.camera.near = 0.5;
+dirLight.shadow.camera.far  = 20;
+scene.add(dirLight);
+
+const ambient = new THREE.AmbientLight(0x404040, 0.6);
+scene.add(ambient);
+
+const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.3);
+hemi.position.set(0,5,0);
+scene.add(hemi);
+
+// ------------------------------------------------------------
+// 3️⃣ 地面（带轻微反射的平面）
+// ------------------------------------------------------------
+const planeGeo = new THREE.PlaneGeometry(20,20);
+const planeMat = new THREE.MeshStandardMaterial({
+  color:0x777777,
+  roughness:0.5,
+  metalness:0,
+  side:THREE.DoubleSide
+});
+const plane = new THREE.Mesh(planeGeo, planeMat);
+plane.rotation.x = -Math.PI/2;
+plane.receiveShadow = true;
+scene.add(plane);
+
+// ------------------------------------------------------------
+// 4️⃣ 透明三角烧瓶（Erlenmeyer Flask）
+// ------------------------------------------------------------
+// 瓶体参数（全局，供碰撞检测使用）
+const flaskHeight = 2.2, bottomRadius = 0.8, topRadius = 0.2;
+
+function createFlask() {
+  // 通过轮廓点生成 LatheGeometry
+  const points = [];
+  const height = flaskHeight;
+  const seg = 30;
+  for(let i=0;i<=seg;i++){
+    const t = i/seg;
+    const y = t*height;
+    // 先宽后窄的线性插值 + 微调让口部有翻唇
+    const r = bottomRadius - (bottomRadius-topRadius)*t + Math.sin(t*Math.PI*4)*0.02;
+    points.push(new THREE.Vector2(r, y));
+  }
+  const geo = new THREE.LatheGeometry(points, 64);
+  const mat = new THREE.MeshPhysicalMaterial({
+    color:0xffffff,
+    transmission:0.9,
+    thickness:0.5,
+    roughness:0.05,
+    ior:1.5,
+    metalness:0,
+    side:THREE.DoubleSide,
+    clearcoat:1,
+    clearcoatRoughness:0.02
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.position.y = 0.1; // 稍微抬起，避免贴地
+  scene.add(mesh);
+  return mesh;
+}
+const flask = createFlask();
+
+// ------------------------------------------------------------
+// 5️⃣ 程序化噪声纹理（用于泡沫的 normalMap）
+// ------------------------------------------------------------
+function generateNoiseNormalMap(size=256) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const imgData = ctx.createImageData(size,size);
+  const data = imgData.data;
+  for(let y=0;y<size;y++){
+    for(let x=0;x<size;x++){
+      const i = (y*size+x)*4;
+      // Simple Perlin‑like noise (value 0‑255)
+      const v = Math.floor(128 + 127*Math.sin(x*0.12)*Math.cos(y*0.12));
+      data[i]=data[i+1]=data[i+2]=v;
+      data[i+3]=255;
+    }
+  }
+  ctx.putImageData(imgData,0,0);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(4,4);
+  return tex;
+}
+const foamNormal = generateNoiseNormalMap();
+
+// ------------------------------------------------------------
+// 6️⃣ 泡沫粒子系统（对象池）
+// ------------------------------------------------------------
+const MAX_PARTICLES = 300;
+const particles = [];          // 活动粒子
+const pool = [];               // 可复用的 Mesh
+
+// 统一的几何体（不同半径用 scale）
+const sphereGeo = new THREE.SphereGeometry(1,16,12);
+const baseMat  = new THREE.MeshStandardMaterial({
+  color:0xFF85A2,
+  roughness:0.3,
+  metalness:0,
+  transmission:0.15,
+  transparent:true,
+  opacity:0.95,
+  normalMap:foamNormal,
+  side:THREE.DoubleSide
+});
+
+function createParticle(){
+  let mesh;
+  if(pool.length){
+    mesh = pool.pop();
+  }else{
+    mesh = new THREE.Mesh(sphereGeo, baseMat.clone());
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    scene.add(mesh);
+  }
+  // 随机化颜色轻微偏移
+  const hue = 0.95 + (Math.random()-0.5)*0.02; // 粉色基调
+  mesh.material.color.setHSL(hue,0.6,0.7);
+  // 随机半径
+  const scale = 0.05 + Math.random()*0.07;
+  mesh.scale.set(scale,scale,scale);
+  // 初始位置在瓶口中心
+  mesh.position.copy(flask.position);
+  mesh.position.y += 2.0; // 瓶口大致高度
+  // 初始速度（向上 + 随机水平扰动）
+  const speed = 2.5 + Math.random()*0.5;
+  const dir = new THREE.Vector3(
+    (Math.random()-0.5)*0.2,
+    1,
+    (Math.random()-0.5)*0.2
+  ).normalize();
+  mesh.userData = {
+    velocity: dir.multiplyScalar(speed),
+    age:0,
+    life: 4 + Math.random()*2,
+    alive:true
+  };
+  particles.push(mesh);
+}
+
+// ------------------------------------------------------------
+// 7️⃣ 物理参数
+// ------------------------------------------------------------
+const GRAVITY = 9.81;
+const DAMPING = 0.98;
+const FLOOR_Y = 0.001;
+
+// ------------------------------------------------------------
+// 8️⃣ 简易的 OrbitControls（鼠标拖拽 + 滚轮）
+// ------------------------------------------------------------
+let isDragging = false;
+let previousMouse = new THREE.Vector2();
+const target = new THREE.Vector3(0,1,0);
+const spherical = new THREE.Spherical();
+function onMouseDown(e){
+  isDragging = true;
+  previousMouse.set(e.clientX, e.clientY);
+}
+function onMouseMove(e){
+  if(!isDragging) return;
+  const delta = new THREE.Vector2(
+    e.clientX - previousMouse.x,
+    e.clientY - previousMouse.y
+  );
+  const rotateSpeed = 0.005;
+  spherical.setFromVector3(camera.position.clone().sub(target));
+  spherical.theta   -= delta.x * rotateSpeed;
+  spherical.phi     -= delta.y * rotateSpeed;
+  spherical.phi = Math.max(0.01, Math.min(Math.PI-0.01, spherical.phi));
+  camera.position.setFromSpherical(spherical).add(target);
+  camera.lookAt(target);
+  previousMouse.set(e.clientX, e.clientY);
+}
+function onMouseUp(){ isDragging = false; }
+function onWheel(e){
+  const delta = e.deltaY * 0.001;
+  const zoomSpeed = 0.5;
+  spherical.setFromVector3(camera.position.clone().sub(target));
+  spherical.radius = Math.max(2, Math.min(15, spherical.radius + delta*zoomSpeed));
+  camera.position.setFromSpherical(spherical).add(target);
+  camera.lookAt(target);
+}
+renderer.domElement.addEventListener('mousedown', onMouseDown);
+renderer.domElement.addEventListener('mousemove', onMouseMove);
+renderer.domElement.addEventListener('mouseup',   onMouseUp);
+renderer.domElement.addEventListener('wheel',    onWheel);
+
+// ------------------------------------------------------------
+// 9️⃣ 动画循环 & 粒子更新
+// ------------------------------------------------------------
+let lastTime = performance.now();
+let emitTimer = 0;
+let emitInterval = 0.02; // 生成频率（秒）
+let emissionStrength = 1.0; // 0‑1，控制喷发强度
+
+function animate(){
+  const now = performance.now();
+  const dt = (now-lastTime)/1000;
+  lastTime = now;
+
+  // ① 产生新粒子（先是柱状喷流 → 逐渐分散）
+  emitTimer += dt;
+  if(emitTimer>emitInterval && particles.length<MAX_PARTICLES){
+    emitTimer = 0;
+    // 随机决定是否生成“大块”或“小块”，模拟喷发从单体柱子到细碎泡沫的过程
+    const count = Math.random()<0.3 ? 1 : Math.floor(1+Math.random()*3);
+    for(let i=0;i<count;i++) createParticle();
+  }
+
+  // ② 更新所有活跃粒子
+  for(let i=particles.length-1;i>=0;i--){
+    const p = particles[i];
+    const ud = p.userData;
+    if(!ud.alive) continue;
+
+    // 重力
+    ud.velocity.y -= GRAVITY*dt;
+    // 阻尼（空气阻力）
+    ud.velocity.multiplyScalar(DAMPING);
+
+    // 位置更新
+    p.position.addScaledVector(ud.velocity, dt);
+    ud.age += dt;
+
+    // 简单碰撞 – 地面
+    if(p.position.y - p.scale.y*0.5 < FLOOR_Y){
+      p.position.y = FLOOR_Y + p.scale.y*0.5;
+      // “摊开” effect：稍微拉宽 XZ
+      p.scale.x *= 1.02;
+      p.scale.z *= 1.02;
+      // 速度衰减到几乎为零
+      ud.velocity.set(0,0,0);
+    }
+
+    // 简单碰撞 – 瓶壁（圆锥体）
+    const local = p.position.clone().sub(flask.position);
+    const y = local.y;
+    if(y>0 && y<2.2){
+      const radiusAtY = bottomRadius - (bottomRadius-topRadius)*(y/2.2);
+      const dist = Math.sqrt(local.x*local.x + local.z*local.z);
+      if(dist > radiusAtY - p.scale.x*0.5){
+        // 反弹并沿壁面滑动
+        const normal = new THREE.Vector3(local.x,0,local.z).normalize();
+        const v = ud.velocity.clone();
+        const dot = v.dot(normal);
+        const refl = v.sub(normal.multiplyScalar(2*dot));
+        ud.velocity.copy(refl.multiplyScalar(0.6)); // 能量损失
+        // 把粒子推回内部
+        const push = radiusAtY - p.scale.x*0.5 - dist;
+        p.position.addScaledVector(normal, push);
+      }
+    }
+
+    // 粒子寿命结束后回收
+    if(ud.age>ud.life){
+      ud.alive = false;
+      // 移除到池中
+      pool.push(p);
+      particles.splice(i,1);
+    }
+  }
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+
+// ------------------------------------------------------------
+// 10️⃣ 交互提示
+// ------------------------------------------------------------
+const info = document.createElement('div');
+info.style.position = 'absolute';
+info.style.top = '10px';
+info.style.left = '10px';
+info.style.color = '#fff';
+info.style.fontFamily = 'sans-serif';
+info.style.background = 'rgba(0,0,0,0.4)';
+info.style.padding = '6px 10px';
+info.style.borderRadius = '4px';
+info.innerHTML = '拖拽鼠标旋转视角，滚轮缩放';
+document.body.appendChild(info);
+</script>
+</body>
+</html>

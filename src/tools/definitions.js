@@ -95,6 +95,12 @@ const EditTool = {
             "The new text to replace old_string with. " +
             "Use an empty string to delete the matched text.",
         },
+        replace_all: {
+          type: "boolean",
+          description:
+            "If true, replace all occurrences of old_string in the file. " +
+            "Defaults to false, which requires old_string to be unique.",
+        },
       },
       required: ["file_path", "old_string", "new_string"],
     },

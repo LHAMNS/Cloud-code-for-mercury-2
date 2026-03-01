@@ -1,97 +1,89 @@
 /**
  * Conversation manager for Mercury Code.
- * Manages chat history sent to the Mercury-2 API (OpenAI chat completions format).
+ * Manages chat history, memory integration, and context compression.
  */
 
+import { estimateTokens, estimateMessagesTokens, compressContext } from "./context.js";
+import { MODEL_LIMITS } from "./config.js";
+
 export class Conversation {
-  /**
-   * @param {string} systemPrompt - The system prompt for the conversation.
-   */
   constructor(systemPrompt) {
     this.systemPrompt = systemPrompt;
     this.messages = [];
+    this._lastActualUsage = null;
+    this._memoryContent = ""; // loaded from memory file
   }
 
-  /**
-   * Add a user message to the conversation history.
-   * @param {string} content - The user message content.
-   */
   addUserMessage(content) {
     this.messages.push({ role: "user", content });
   }
 
-  /**
-   * Add an assistant message to the conversation history.
-   * @param {string|null} content - The assistant message content (may be null if only tool calls).
-   * @param {Array|null} toolCalls - Optional array of tool calls.
-   */
   addAssistantMessage(content, toolCalls = null) {
     const message = { role: "assistant", content };
-    if (toolCalls) {
-      message.tool_calls = toolCalls;
-    }
+    if (toolCalls) message.tool_calls = toolCalls;
     this.messages.push(message);
   }
 
-  /**
-   * Add a tool result message to the conversation history.
-   * @param {string} toolCallId - The ID of the tool call this result is for.
-   * @param {string} content - The tool result content.
-   */
   addToolResult(toolCallId, content) {
     this.messages.push({ role: "tool", tool_call_id: toolCallId, content });
   }
 
   /**
-   * Return the full messages array for an API call, including the system prompt.
-   * @returns {Array} The complete messages array.
+   * Return messages for API call, with system prompt + memory injected.
    */
   getMessages() {
-    return [{ role: "system", content: this.systemPrompt }, ...this.messages];
+    let sysContent = this.systemPrompt;
+    if (this._memoryContent) {
+      sysContent += `\n\n## Accumulated Memory\n\nThe following is your long-term memory from earlier in this session:\n\n${this._memoryContent}`;
+    }
+    return [{ role: "system", content: sysContent }, ...this.messages];
   }
 
-  /**
-   * Reset the conversation history.
-   */
   clear() {
     this.messages = [];
+    this._lastActualUsage = null;
+    // Keep memory — it persists across clears
+  }
+
+  updateUsage(usage) {
+    if (usage) this._lastActualUsage = usage;
   }
 
   /**
-   * Rough token estimate based on character count / 4.
-   * @returns {number} Estimated token count.
+   * Load memory from MemoryManager.
    */
+  async loadMemory(memory) {
+    if (memory) {
+      this._memoryContent = await memory.read();
+    }
+  }
+
   getTokenEstimate() {
-    let totalChars = this.systemPrompt.length;
-    for (const message of this.messages) {
-      if (message.content) {
-        totalChars += message.content.length;
-      }
-      if (message.tool_calls) {
-        totalChars += JSON.stringify(message.tool_calls).length;
-      }
+    if (this._lastActualUsage?.prompt_tokens) {
+      return this._lastActualUsage.prompt_tokens;
     }
-    return Math.ceil(totalChars / 4);
+    const sysTokens = estimateTokens(this.systemPrompt) + estimateTokens(this._memoryContent) + 4;
+    return sysTokens + estimateMessagesTokens(this.messages);
+  }
+
+  getUsagePercent() {
+    const used = this.getTokenEstimate();
+    const pct = ((used / MODEL_LIMITS.max_context_tokens) * 100).toFixed(1);
+    return `${pct}% (${used}/${MODEL_LIMITS.max_context_tokens})`;
   }
 
   /**
-   * Trim oldest messages if estimated tokens exceed the limit.
-   * Always keeps at least the last 4 messages.
-   * @param {number} maxTokens - Maximum token estimate before trimming.
+   * Run smart context compression.
+   * @param {object} client - MercuryClient for summarization
+   * @param {object} memory - MemoryManager for persistent storage
+   * @param {Function} onInfo - info callback
    */
-  trimIfNeeded(maxTokens = 120000) {
-    if (this.getTokenEstimate() <= maxTokens) {
-      return;
+  async compress(client, memory, onInfo) {
+    const fullSystemPrompt = this.systemPrompt + (this._memoryContent || "");
+    await compressContext(this.messages, fullSystemPrompt, client, memory, onInfo);
+    // Reload memory after compression (it may have been updated)
+    if (memory) {
+      this._memoryContent = await memory.read();
     }
-
-    const minKeep = 4;
-
-    while (this.messages.length > minKeep && this.getTokenEstimate() > maxTokens) {
-      this.messages.shift();
-    }
-
-    console.log(
-      `[Mercury] Conversation trimmed to ${this.messages.length} messages (~${this.getTokenEstimate()} tokens estimated).`
-    );
   }
 }

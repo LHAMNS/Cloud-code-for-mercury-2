@@ -9,6 +9,7 @@ import { buildSystemPrompt } from "./system-prompt.js";
 import { REASONING_LEVELS } from "./config.js";
 import { TOOL_DEFINITIONS } from "./tools/definitions.js";
 import { ToolExecutor } from "./tools/executor.js";
+import { MemoryManager, ConversationLog } from "./memory.js";
 import {
   printWelcome,
   printHelp,
@@ -22,24 +23,33 @@ import {
   spinner,
 } from "./ui/display.js";
 
+// Maximum number of agentic tool-call turns before forcing a stop
+const MAX_TOOL_TURNS = 100;
+
 export class MercuryRepl {
   constructor(options = {}) {
     this.client = new MercuryClient(options);
     this.toolExecutor = new ToolExecutor();
+    this.memory = new MemoryManager(process.cwd());
+    this.log = new ConversationLog(process.cwd());
     this.conversation = new Conversation(buildSystemPrompt(process.cwd()));
     this.verbose = options.verbose || false;
     this._rl = null;
+    this._toolTurnCount = 0;
   }
 
   // ── Interactive mode ─────────────────────────────────────────────────────
 
   async start() {
+    // Load persistent memory into conversation
+    await this.conversation.loadMemory(this.memory);
+
     printWelcome();
 
     this._rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
-      prompt: "\x1b[32m\u276F \x1b[0m", // green ❯
+      prompt: "\x1b[32m\u276F \x1b[0m",
     });
 
     this._rl.on("line", async (line) => {
@@ -57,7 +67,10 @@ export class MercuryRepl {
   // ── Single-shot mode ─────────────────────────────────────────────────────
 
   async runOnce(promptText) {
+    await this.conversation.loadMemory(this.memory);
     this.conversation.addUserMessage(promptText);
+    await this.log.append({ role: "user", content: promptText });
+    this._toolTurnCount = 0;
     try {
       await this._sendAndProcess();
     } catch (err) {
@@ -78,12 +91,14 @@ export class MercuryRepl {
     }
 
     if (trimmed.startsWith("/")) {
-      this._handleCommand(trimmed);
+      await this._handleCommand(trimmed);
       this._rl.prompt();
       return;
     }
 
     this.conversation.addUserMessage(trimmed);
+    await this.log.append({ role: "user", content: trimmed });
+    this._toolTurnCount = 0; // Reset turn counter for new user message
 
     try {
       await this._sendAndProcess();
@@ -98,7 +113,11 @@ export class MercuryRepl {
   // ── Core loop: send to Mercury-2 and process the response ────────────────
 
   async _sendAndProcess() {
-    this.conversation.trimIfNeeded();
+    // Smart context compression before sending
+    await this.conversation.compress(this.client, this.memory, (msg) =>
+      printInfo(msg)
+    );
+
     spinner.start("Thinking...");
 
     try {
@@ -113,28 +132,48 @@ export class MercuryRepl {
           spinner.stop();
           firstChunk = false;
         }
-
         chunks.push(chunk);
 
-        // Stream text to terminal in real-time
         const delta = chunk.choices?.[0]?.delta;
-        if (delta?.content) {
-          printStreamChunk(delta.content);
-        }
+        if (delta?.content) printStreamChunk(delta.content);
       }
 
-      if (firstChunk) spinner.stop(); // no chunks at all
+      if (firstChunk) spinner.stop();
 
       const response = this._assembleStreamResponse(chunks);
 
       if (response.content) printStreamEnd();
 
+      if (response.usage) this.conversation.updateUsage(response.usage);
+
       // ── Tool calls ──────────────────────────────────────────────────────
       if (response.tool_calls && response.tool_calls.length > 0) {
+        this._toolTurnCount++;
+
+        // Guard against infinite tool-call loops
+        if (this._toolTurnCount > MAX_TOOL_TURNS) {
+          printError(
+            `Reached maximum tool-call turns (${MAX_TOOL_TURNS}). Stopping to prevent infinite loop.`
+          );
+          this.conversation.addAssistantMessage(
+            response.content ||
+              "(Stopped: maximum tool-call turns reached)"
+          );
+          return;
+        }
+
         this.conversation.addAssistantMessage(
           response.content || null,
           response.tool_calls
         );
+        await this.log.append({
+          role: "assistant",
+          content: response.content,
+          tool_calls: response.tool_calls.map((tc) => ({
+            name: tc.function.name,
+            arguments: tc.function.arguments,
+          })),
+        });
 
         for (const tc of response.tool_calls) {
           const fnName = tc.function.name;
@@ -153,15 +192,23 @@ export class MercuryRepl {
           );
           printToolResult(result);
           this.conversation.addToolResult(tc.id, String(result));
+          await this.log.append({
+            role: "tool",
+            name: fnName,
+            result_preview: String(result).slice(0, 500),
+          });
         }
 
-        // Let the model continue after tool results
         await this._sendAndProcess();
         return;
       }
 
       // ── Plain text response ──────────────────────────────────────────────
       this.conversation.addAssistantMessage(response.content || "");
+      await this.log.append({
+        role: "assistant",
+        content: response.content,
+      });
       if (response.usage) printTokenUsage(response.usage);
     } catch (err) {
       spinner.stop();
@@ -172,7 +219,7 @@ export class MercuryRepl {
 
   // ── Slash commands ───────────────────────────────────────────────────────
 
-  _handleCommand(cmd) {
+  async _handleCommand(cmd) {
     const parts = cmd.toLowerCase().split(/\s+/);
     const command = parts[0];
     switch (command) {
@@ -181,6 +228,7 @@ export class MercuryRepl {
         break;
       case "/clear":
         this.conversation.clear();
+        await this.log.clear();
         printInfo("Conversation cleared.");
         break;
       case "/config":
@@ -207,6 +255,12 @@ export class MercuryRepl {
         printInfo(`Reasoning effort set to: ${level}`);
         break;
       }
+      case "/context":
+        printInfo(`Context usage: ${this.conversation.getUsagePercent()}`);
+        printInfo(`Messages: ${this.conversation.messages.length}`);
+        printInfo(`Memory file: ${this.memory.filePath}`);
+        printInfo(`Conversation log: ${this.log.filePath}`);
+        break;
       case "/exit":
         printInfo("Goodbye!");
         process.exit(0);

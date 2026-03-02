@@ -8,6 +8,9 @@ import { SubAgent, runSubAgentTeam } from '../subagent.js';
 import { MercuryClient } from '../client.js';
 import { AgentTabBar } from '../ui/agent-tabs.js';
 import { Sandbox, SANDBOX_OFF } from '../sandbox.js';
+import { LspClient, formatLocations, formatSymbols } from '../lsp.js';
+import { searchSymbols, fileOutline, formatSearchResults } from '../ast-search.js';
+import { discoverAgents, matchAgentForTask } from '../agent-definitions.js';
 
 // ── Sanitized environment for child processes ────────────────────────────────
 // Strip keys that commonly hold secrets to prevent exfiltration via Bash
@@ -153,6 +156,20 @@ export class ToolExecutor {
     this.trustMode = options.trustMode || 'approval';
     /** @type {Sandbox|null} */
     this.sandbox = options.sandbox || null;
+    /** @type {LspClient|null} */
+    this._lspClient = null;
+    /** @type {Map|null} Cached agent definitions */
+    this._agents = null;
+  }
+
+  /**
+   * Get discovered agents (lazy-loaded, cached).
+   */
+  async _getAgents() {
+    if (!this._agents) {
+      this._agents = await discoverAgents(this.workspace);
+    }
+    return this._agents;
   }
 
   /**
@@ -203,6 +220,8 @@ export class ToolExecutor {
       subagent: '_subAgent',
       subagentteam: '_subAgentTeam',
       contextsearch: '_contextSearch',
+      lsp: '_lsp',
+      astsearch: '_astSearch',
     };
 
     const handler = handlers[toolName.toLowerCase()];
@@ -665,7 +684,7 @@ export class ToolExecutor {
    * @returns {string} Sub-agent's final response
    */
   async _subAgent(args) {
-    const { task } = args;
+    const { task, agent_type } = args;
     if (!task) {
       return 'Error: task is required.';
     }
@@ -674,12 +693,26 @@ export class ToolExecutor {
       return 'Error: Sub-agents are disabled in read-only mode.';
     }
 
+    // Resolve agent definition
+    const agents = await this._getAgents();
+    let agentDef = null;
+    if (agent_type) {
+      agentDef = agents.get(agent_type);
+      if (!agentDef) {
+        return `Error: Unknown agent type "${agent_type}". Available: ${[...agents.keys()].join(', ')}`;
+      }
+    } else {
+      // Auto-select based on task description
+      agentDef = matchAgentForTask(agents, task);
+    }
+
     const agent = new SubAgent({
       task,
       ...this._clientOptions,
       workspace: this.workspace,
       trustMode: this.trustMode,
       sandboxConfig: this.sandbox?.toSubAgentConfig(),
+      agentDef,
     });
     return await agent.run();
   }
@@ -1001,16 +1034,28 @@ export class ToolExecutor {
       return 'Error: Sub-agents are disabled in read-only mode.';
     }
 
+    // Resolve agent definitions for each task
+    const agents = await this._getAgents();
+    const resolvedTasks = tasks.map((t) => {
+      const taskObj = typeof t === 'string' ? { task: t } : { ...t };
+      if (taskObj.agent_type) {
+        taskObj.agentDef = agents.get(taskObj.agent_type) || null;
+      } else {
+        taskObj.agentDef = matchAgentForTask(agents, taskObj.task);
+      }
+      return taskObj;
+    });
+
     // Create interactive tab bar for live display
     const tabBar = new AgentTabBar();
-    for (const task of tasks) {
+    for (const task of resolvedTasks) {
       tabBar.addAgent(task);
     }
     tabBar.start();
 
     let results;
     try {
-      results = await runSubAgentTeam(tasks, {
+      results = await runSubAgentTeam(resolvedTasks, {
         ...this._clientOptions,
         workspace: this.workspace,
         trustMode: this.trustMode,
@@ -1037,6 +1082,90 @@ export class ToolExecutor {
     });
 
     return formatted.join('\n\n');
+  }
+
+  // ── LSP ────────────────────────────────────────────────────────────────────
+
+  /**
+   * Language Server Protocol operations for semantic code intelligence.
+   * Lazy-initializes the LSP client on first use.
+   */
+  async _lsp(args) {
+    const { action, file_path, line, character, query } = args;
+    if (!action) return 'Error: action is required (definition, references, hover, symbols, workspace_symbols, diagnostics).';
+
+    // Lazy init LspClient
+    if (!this._lspClient) {
+      this._lspClient = new LspClient(this.workspace);
+    }
+
+    try {
+      switch (action) {
+        case 'definition': {
+          if (!file_path || !line) return 'Error: file_path and line are required for definition.';
+          const locs = await this._lspClient.gotoDefinition(file_path, line, character || 0);
+          return formatLocations(locs);
+        }
+        case 'references': {
+          if (!file_path || !line) return 'Error: file_path and line are required for references.';
+          const refs = await this._lspClient.findReferences(file_path, line, character || 0);
+          return formatLocations(refs);
+        }
+        case 'hover': {
+          if (!file_path || !line) return 'Error: file_path and line are required for hover.';
+          const info = await this._lspClient.hover(file_path, line, character || 0);
+          return info || 'No hover information available.';
+        }
+        case 'symbols': {
+          if (!file_path) return 'Error: file_path is required for symbols.';
+          const syms = await this._lspClient.documentSymbols(file_path);
+          return formatSymbols(syms);
+        }
+        case 'workspace_symbols': {
+          if (!query) return 'Error: query is required for workspace_symbols.';
+          const syms = await this._lspClient.workspaceSymbols(query);
+          return formatSymbols(syms);
+        }
+        case 'diagnostics': {
+          if (!file_path) return 'Error: file_path is required for diagnostics.';
+          const diags = await this._lspClient.getDiagnostics(file_path);
+          if (!diags || diags.length === 0) return 'No diagnostics for this file.';
+          return diags.map(d => `${d.severity || 'info'} (line ${d.range?.start?.line || '?'}): ${d.message}`).join('\n');
+        }
+        default:
+          return `Error: Unknown LSP action "${action}". Use: definition, references, hover, symbols, workspace_symbols, diagnostics.`;
+      }
+    } catch (err) {
+      return `LSP error: ${err.message}`;
+    }
+  }
+
+  // ── AST Search ─────────────────────────────────────────────────────────────
+
+  /**
+   * AST-based structural code search. Two actions: 'search' and 'outline'.
+   */
+  async _astSearch(args) {
+    const { action, query, kind, language, file_path } = args;
+    if (!action) return 'Error: action is required (search or outline).';
+
+    try {
+      switch (action) {
+        case 'search': {
+          if (!query) return 'Error: query is required for search action.';
+          const results = await searchSymbols(this.workspace, query, { kind, language });
+          return formatSearchResults(results);
+        }
+        case 'outline': {
+          if (!file_path) return 'Error: file_path is required for outline action.';
+          return await fileOutline(file_path);
+        }
+        default:
+          return `Error: Unknown AstSearch action "${action}". Use: search, outline.`;
+      }
+    } catch (err) {
+      return `AstSearch error: ${err.message}`;
+    }
   }
 
   // ── ContextSearch ──────────────────────────────────────────────────────────

@@ -216,13 +216,13 @@ const SubAgentTool = {
     name: "SubAgent",
     description:
       "Spawn an autonomous sub-agent to handle a specific task. " +
-      "The sub-agent gets its own isolated conversation context and can use all the same tools " +
-      "(Read, Write, Edit, Bash, Glob, Grep). " +
-      "Use this for tasks that can be done independently, such as: " +
-      "searching the codebase for specific patterns, reading and analyzing files, " +
+      "The sub-agent gets its own isolated conversation context. " +
+      "Use this for tasks that can be done independently: " +
+      "searching the codebase, reading and analyzing files, " +
       "running tests, or performing research. " +
-      "The sub-agent runs to completion and returns its findings as text. " +
-      "You can spawn multiple sub-agents concurrently for parallel work.",
+      "Available agent types: 'explore' (fast read-only search), " +
+      "'plan' (architecture/design), 'general-purpose' (full tools). " +
+      "Custom agents from .mercury/agents/*.md are also available.",
     parameters: {
       type: "object",
       properties: {
@@ -233,6 +233,13 @@ const SubAgentTool = {
             "Be specific — include file paths, patterns to search for, " +
             "or exact operations to perform. The sub-agent has no context " +
             "from the main conversation, so include all necessary information.",
+        },
+        agent_type: {
+          type: "string",
+          description:
+            "The type of agent to spawn. Built-in types: 'explore' (read-only codebase search), " +
+            "'plan' (architecture/design research), 'general-purpose' (full read/write tools). " +
+            "Defaults to auto-selection based on task description.",
         },
       },
       required: ["task"],
@@ -249,12 +256,10 @@ const SubAgentTeamTool = {
     name: "SubAgentTeam",
     description:
       "Spawn multiple sub-agents to work on different tasks in parallel. " +
-      "Each sub-agent gets its own context and can use all tools independently. " +
+      "Each sub-agent gets its own context and can use tools independently. " +
       "All sub-agents run concurrently and results are returned together. " +
-      "Use this when you need to perform multiple independent research or analysis tasks " +
-      "simultaneously (e.g., searching different parts of the codebase, " +
-      "running different test suites, analyzing different files). " +
-      "Maximum 5 concurrent sub-agents.",
+      "Use this for multiple independent research or analysis tasks. " +
+      "Each task can specify its own agent_type. Maximum 5 concurrent sub-agents.",
     parameters: {
       type: "object",
       properties: {
@@ -267,12 +272,16 @@ const SubAgentTeamTool = {
                 type: "string",
                 description: "Detailed description of this sub-agent's task.",
               },
+              agent_type: {
+                type: "string",
+                description:
+                  "Agent type for this task: 'explore', 'plan', 'general-purpose', or a custom name.",
+              },
             },
             required: ["task"],
           },
           description:
-            "Array of task objects, each describing a task for one sub-agent. " +
-            "Each task should be self-contained with all necessary context.",
+            "Array of task objects. Each task is self-contained with all necessary context.",
           maxItems: 5,
         },
       },
@@ -481,6 +490,93 @@ const ContextSearchTool = {
 };
 
 /**
+ * Go to definition, find references, and get hover info using LSP.
+ */
+const LspTool = {
+  type: "function",
+  function: {
+    name: "Lsp",
+    description:
+      "Language Server Protocol operations for semantic code intelligence. " +
+      "Supports: definition (go to definition), references (find all references), " +
+      "hover (type info/docs), symbols (document outline), workspace_symbols (search symbols). " +
+      "Requires a language server to be available on the system. " +
+      "Auto-detects: TypeScript, Python, Go, Rust, C/C++.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          description:
+            "The LSP action: 'definition', 'references', 'hover', 'symbols', 'workspace_symbols', 'diagnostics'.",
+        },
+        file_path: {
+          type: "string",
+          description: "Absolute path to the file (required for definition, references, hover, symbols, diagnostics).",
+        },
+        line: {
+          type: "number",
+          description: "1-based line number (required for definition, references, hover).",
+        },
+        character: {
+          type: "number",
+          description: "0-based column number (required for definition, references, hover).",
+        },
+        query: {
+          type: "string",
+          description: "Search query for workspace_symbols action.",
+        },
+      },
+      required: ["action"],
+    },
+  },
+};
+
+/**
+ * AST-based structural code search.
+ */
+const AstSearchTool = {
+  type: "function",
+  function: {
+    name: "AstSearch",
+    description:
+      "Search for code symbols (functions, classes, methods, types, imports, etc.) " +
+      "using structural pattern matching. Faster and more precise than Grep for finding " +
+      "code definitions. Use 'search' to find symbols across the workspace, or 'outline' " +
+      "to get the structural outline of a single file. " +
+      "Supports: JavaScript, TypeScript, Python, Go, Rust.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          description: "The action: 'search' (find symbols) or 'outline' (file structure).",
+        },
+        query: {
+          type: "string",
+          description: "Symbol name or regex pattern to search for (required for 'search').",
+        },
+        kind: {
+          type: "string",
+          description:
+            "Filter by symbol kind: function, class, method, interface, type, enum, " +
+            "import, export, variable, decorator, struct, trait, macro. Optional.",
+        },
+        language: {
+          type: "string",
+          description: "Filter by language: javascript, typescript, python, go, rust. Optional.",
+        },
+        file_path: {
+          type: "string",
+          description: "Absolute path to file (required for 'outline').",
+        },
+      },
+      required: ["action"],
+    },
+  },
+};
+
+/**
  * Complete list of tool definitions in OpenAI function calling format.
  */
 export const TOOL_DEFINITIONS = [
@@ -494,6 +590,8 @@ export const TOOL_DEFINITIONS = [
   ListDirTool,
   DiffTool,
   FetchTool,
+  LspTool,
+  AstSearchTool,
   ContextSearchTool,
   SubAgentTool,
   SubAgentTeamTool,

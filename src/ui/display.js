@@ -116,10 +116,15 @@ export function printHelp() {
       ["/sandbox [mode]", "on | off | strict | subagents | network"],
       ["/supercompress", "Toggle aggressive compression"],
       ["/contextsearch", "Toggle context search tool"],
+      ["/agents [cmd]", "list | create <name> — manage agents"],
     ]],
     ["Session", [
       ["/history [cmd]", "save | restore | list"],
       ["/context", "View context usage & stats"],
+      ["/diff [ref]", "Show git diff (default: HEAD)"],
+      ["/compact", "Compact/summarize conversation"],
+      ["/new", "Start new conversation (saves current)"],
+      ["/copy", "Copy last assistant reply to clipboard"],
     ]],
   ];
 
@@ -140,6 +145,8 @@ export function printHelp() {
   console.log(`    ${YELLOW}\\${RESET}       ${DIM}Open $EDITOR for multiline input${RESET}`);
   console.log(`    ${YELLOW}@file${RESET}   ${DIM}Include file contents in prompt${RESET}`);
   console.log(`    ${YELLOW}Ctrl+C${RESET}  ${DIM}Abort running tool execution${RESET}`);
+  console.log(`    ${YELLOW}Ctrl+J${RESET}  ${DIM}Insert newline (multiline input)${RESET}`);
+  console.log(`    ${YELLOW}!cmd${RESET}    ${DIM}Execute shell command inline${RESET}`);
   console.log(`    ${YELLOW}Tab${RESET}     ${DIM}Auto-complete slash commands${RESET}`);
   console.log("");
 }

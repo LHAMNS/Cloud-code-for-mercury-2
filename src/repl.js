@@ -18,6 +18,7 @@ import { MemoryManager, ConversationLog } from "./memory.js";
 import { SessionHistory } from "./history.js";
 import { RollbackManager } from "./rollback.js";
 import { Sandbox, SANDBOX_OFF, SANDBOX_ON, SANDBOX_STRICT, SANDBOX_MODES } from "./sandbox.js";
+import { discoverAgents, formatAgentList, scaffoldAgent } from "./agent-definitions.js";
 import {
   printWelcome,
   printHelp,
@@ -79,6 +80,9 @@ export class MercuryRepl {
     this._rl = null;
     this._toolTurnCount = 0;
     this._processing = false;
+    /** @type {string[]} Buffer for multiline input (Ctrl+J) */
+    this._multilineBuffer = [];
+    this._inMultilineMode = false;
     this._sessionId = this._generateSessionId();
 
     // Workspace and trust
@@ -130,6 +134,7 @@ export class MercuryRepl {
       "/help", "/clear", "/trust", "/workspace", "/reasoning",
       "/supercompress", "/contextsearch", "/sandbox", "/history",
       "/context", "/settings", "/config", "/edit", "/exit",
+      "/agents", "/diff", "/compact", "/new", "/copy",
     ];
 
     this._rl = readline.createInterface({
@@ -178,6 +183,24 @@ export class MercuryRepl {
 
     this._rl.on("line", async (line) => {
       if (this._processing || this._inRollbackMode) return;
+
+      // Multiline mode: if buffer exists, collect lines and submit
+      if (this._inMultilineMode) {
+        this._multilineBuffer.push(line);
+        const combined = this._multilineBuffer.join("\n");
+        this._multilineBuffer = [];
+        this._inMultilineMode = false;
+        this._processing = true;
+        this._aborted = false;
+        try {
+          await this._handleInput(combined);
+        } finally {
+          this._processing = false;
+          this._aborted = false;
+        }
+        return;
+      }
+
       this._processing = true;
       this._aborted = false;
       try {
@@ -334,6 +357,22 @@ export class MercuryRepl {
   _setupKeyListener() {
     process.stdin.on("keypress", (str, key) => {
       if (!key) return;
+
+      // Ctrl+J: enter multiline input mode
+      if (key.ctrl && key.name === "j" && !this._processing) {
+        // Get current line content and add to buffer
+        const currentLine = this._rl.line || "";
+        this._multilineBuffer.push(currentLine);
+        this._inMultilineMode = true;
+        // Clear current line and show multiline prompt
+        this._rl.line = "";
+        this._rl.cursor = 0;
+        const lineNum = this._multilineBuffer.length + 1;
+        process.stdout.write(`\n\x1b[90m${String(lineNum).padStart(2)}│\x1b[0m `);
+        return;
+      }
+
+      // ESC triple-tap for rollback
       if (key.name === "escape" && !this._processing) {
         const now = Date.now();
         this._escPresses = this._escPresses.filter((t) => now - t < ESC_WINDOW_MS);
@@ -541,6 +580,27 @@ export class MercuryRepl {
       }
       trimmed = editorText;
       printInfo(`Received ${trimmed.length} chars from editor.`);
+    }
+
+    // ! prefix → execute shell command inline
+    if (trimmed.startsWith("!") && trimmed.length > 1) {
+      const cmd = trimmed.slice(1).trim();
+      printInfo(`$ ${cmd}`);
+      try {
+        const result = _execSync(cmd, {
+          encoding: "utf-8",
+          timeout: 30000,
+          cwd: this.workspace,
+          maxBuffer: 2 * 1024 * 1024,
+        });
+        if (result) console.log(result);
+      } catch (err) {
+        if (err.stdout) console.log(err.stdout);
+        if (err.stderr) console.error(err.stderr);
+      }
+      this._rl.setPrompt(this._buildPrompt());
+      this._rl.prompt();
+      return;
     }
 
     // Collapse long pasted content in display (full text still used)
@@ -1089,6 +1149,26 @@ export class MercuryRepl {
         await this._handleSettings(parts.slice(1));
         break;
 
+      case "/agents":
+        await this._handleAgents(parts.slice(1));
+        break;
+
+      case "/diff":
+        await this._handleDiff(parts.slice(1));
+        break;
+
+      case "/compact":
+        await this._handleCompact();
+        break;
+
+      case "/new":
+        await this._handleNew();
+        break;
+
+      case "/copy":
+        this._handleCopy();
+        break;
+
       case "/edit": {
         printInfo(`Opening ${process.env.VISUAL || process.env.EDITOR || "vi"} for multiline input...`);
         const editorText = this._openEditor();
@@ -1289,6 +1369,120 @@ export class MercuryRepl {
     }
 
     printError(`Unknown sandbox option: ${subCmd}. Options: on, off, strict, subagents, network`);
+  }
+
+  // ── Agent management ─────────────────────────────────────────────────────
+
+  async _handleAgents(args) {
+    const subCmd = args[0]?.toLowerCase();
+
+    if (!subCmd || subCmd === "list") {
+      const agents = await discoverAgents(this.workspace);
+      console.log(formatAgentList(agents));
+      return;
+    }
+
+    if (subCmd === "create" || subCmd === "new") {
+      const name = args[1];
+      if (!name) {
+        printError("Usage: /agents create <name>");
+        return;
+      }
+      try {
+        const filePath = await scaffoldAgent(this.workspace, name);
+        printSuccess(`Created agent: ${filePath}`);
+        printInfo("Edit the file to customize the agent's system prompt and tools.");
+        // Clear agent cache
+        this.toolExecutor._agents = null;
+      } catch (err) {
+        printError(`Error creating agent: ${err.message}`);
+      }
+      return;
+    }
+
+    printError(`Unknown /agents option: ${subCmd}. Options: list, create <name>`);
+  }
+
+  // ── /diff command ───────────────────────────────────────────────────────
+
+  async _handleDiff(args) {
+    const ref = args[0] || "HEAD";
+    try {
+      const result = _execSync(`git diff ${ref} && git diff --cached && echo "---UNTRACKED---" && git ls-files --others --exclude-standard`, {
+        encoding: "utf-8",
+        timeout: 15000,
+        cwd: this.workspace,
+        maxBuffer: 5 * 1024 * 1024,
+      });
+      if (!result.trim() || result.trim() === "---UNTRACKED---") {
+        printInfo("No changes detected.");
+      } else {
+        console.log(result);
+      }
+    } catch (err) {
+      printError(`Git diff error: ${err.stderr || err.message}`);
+    }
+  }
+
+  // ── /compact command ────────────────────────────────────────────────────
+
+  async _handleCompact() {
+    printInfo("Compacting conversation...");
+    const before = this.conversation.messages.length;
+    try {
+      await this.conversation.compressIfNeeded(this.client, this.memory, 0.5);
+      const after = this.conversation.messages.length;
+      printSuccess(`Compacted: ${before} messages → ${after} messages`);
+    } catch (err) {
+      printError(`Compact error: ${err.message}`);
+    }
+  }
+
+  // ── /new command ────────────────────────────────────────────────────────
+
+  async _handleNew() {
+    // Save current session
+    if (this.conversation && this.conversation.messages.length > 1) {
+      try {
+        await this.history.save({
+          id: this._sessionId,
+          cwd: this.workspace,
+          messages: this.conversation.getMessages(),
+          config: this.client.config,
+        });
+        printInfo("Current session saved.");
+      } catch { /* non-critical */ }
+    }
+
+    // Reset conversation
+    this._sessionId = `s-${Date.now().toString(36)}`;
+    this.conversation = new Conversation(buildSystemPrompt(this.workspace, this.trustMode, this.sandbox));
+    this.rollback = new RollbackManager(this.workspace);
+    this._toolTurnCount = 0;
+    printSuccess("Started new conversation. Previous session saved.");
+  }
+
+  // ── /copy command ───────────────────────────────────────────────────────
+
+  _handleCopy() {
+    // Find the last assistant message
+    const msgs = this.conversation.messages;
+    const last = [...msgs].reverse().find((m) => m.role === "assistant" && m.content);
+    if (!last) {
+      printError("No assistant message to copy.");
+      return;
+    }
+
+    // Attempt copy to clipboard
+    try {
+      const clip = process.platform === "darwin" ? "pbcopy" : "xclip -selection clipboard";
+      _execSync(clip, { input: last.content, timeout: 5000 });
+      printSuccess(`Copied ${last.content.length} chars to clipboard.`);
+    } catch {
+      // Fallback: print it
+      printInfo("Clipboard not available. Last assistant response:");
+      console.log(last.content);
+    }
   }
 
   // ── Context info ─────────────────────────────────────────────────────────

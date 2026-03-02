@@ -9,3 +9,7 @@ export { compressContext, superCompressContext, estimateTokens, estimateMessages
 export { SubAgent, runSubAgentTeam } from "./subagent.js";
 export { SessionHistory } from "./history.js";
 export { RollbackManager } from "./rollback.js";
+export { Sandbox, createDefaultSandbox } from "./sandbox.js";
+export { LspClient } from "./lsp.js";
+export { searchSymbols, fileOutline, extractSymbols } from "./ast-search.js";
+export { discoverAgents, resolveAgentTools, matchAgentForTask, formatAgentList, scaffoldAgent } from "./agent-definitions.js";

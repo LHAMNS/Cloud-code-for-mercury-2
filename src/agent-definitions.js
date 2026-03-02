@@ -171,6 +171,9 @@ function loadAgentFromMarkdown(content, filePath) {
     disallowedTools: fm.disallowedTools || [],
     model: fm.model || null,
     maxTurns: fm.maxTurns || 30,
+    permissionMode: fm.permissionMode || null, // default, open, readonly
+    background: fm.background === true,
+    isolation: fm.isolation || null, // 'worktree' or null
     builtin: false,
     source: filePath,
   };

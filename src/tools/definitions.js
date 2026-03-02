@@ -222,7 +222,9 @@ const SubAgentTool = {
       "running tests, or performing research. " +
       "Available agent types: 'explore' (fast read-only search), " +
       "'plan' (architecture/design), 'general-purpose' (full tools). " +
-      "Custom agents from .mercury/agents/*.md are also available.",
+      "Custom agents from .mercury/agents/*.md are also available. " +
+      "Agents can be resumed by passing their agentId, run in background, " +
+      "or isolated in a git worktree.",
     parameters: {
       type: "object",
       properties: {
@@ -240,6 +242,27 @@ const SubAgentTool = {
             "The type of agent to spawn. Built-in types: 'explore' (read-only codebase search), " +
             "'plan' (architecture/design research), 'general-purpose' (full read/write tools). " +
             "Defaults to auto-selection based on task description.",
+        },
+        resume: {
+          type: "string",
+          description:
+            "Agent ID to resume. Pass the agentId from a previous invocation to continue " +
+            "with the agent's full prior context preserved. The new task/prompt will be " +
+            "appended to the existing conversation.",
+        },
+        run_in_background: {
+          type: "boolean",
+          description:
+            "Run the agent in the background. Returns immediately with the agentId. " +
+            "The agent continues working asynchronously. Check results later by resuming.",
+        },
+        isolation: {
+          type: "string",
+          enum: ["worktree"],
+          description:
+            "Set to 'worktree' to run the agent in a temporary git worktree, " +
+            "giving it an isolated copy of the repository. Changes are committed " +
+            "to a temporary branch. Worktree is cleaned up if no changes are made.",
         },
       },
       required: ["task"],

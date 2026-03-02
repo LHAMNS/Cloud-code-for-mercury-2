@@ -14,6 +14,9 @@ import { RollbackManager } from "./rollback.js";
 import { Sandbox, SANDBOX_OFF } from "./sandbox.js";
 import { resolveAgentTools } from "./agent-definitions.js";
 import path from "node:path";
+import fs from "node:fs";
+import { readFile, writeFile, mkdir, readdir, rm } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 
 // Maximum tool turns per sub-agent (more conservative than main agent)
 const MAX_SUB_TURNS = 30;
@@ -26,6 +29,30 @@ const FENCE_END = "[TOOL_OUTPUT_END]";
 
 // Track running sub-agents globally for concurrency control
 let runningCount = 0;
+
+// Track background agents globally for retrieval/resume
+const _backgroundAgents = new Map();
+
+/**
+ * Get a background agent by ID (for checking completion).
+ * @param {string} agentId
+ * @returns {SubAgent|null}
+ */
+export function getBackgroundAgent(agentId) {
+  return _backgroundAgents.get(agentId) || null;
+}
+
+/**
+ * List all active background agents.
+ * @returns {Array<{agentId: string, task: string}>}
+ */
+export function listBackgroundAgents() {
+  const list = [];
+  for (const [id, agent] of _backgroundAgents) {
+    list.push({ agentId: id, task: agent.task });
+  }
+  return list;
+}
 
 /**
  * SubAgent: an isolated agent with its own conversation context.
@@ -42,25 +69,34 @@ export class SubAgent {
    * @param {Function} [options.onProgress] - Callback: (event, detail) => void
    * @param {object} [options.sandboxConfig] - Sandbox config from parent
    * @param {object} [options.agentDef] - Agent definition (from agent-definitions.js)
+   * @param {string} [options.resume] - Agent ID to resume (loads prior messages)
+   * @param {boolean} [options.runInBackground] - Run asynchronously
+   * @param {string} [options.isolation] - 'worktree' for git worktree isolation
    */
   constructor(options = {}) {
     this.task = options.task || "";
     this.workspace = options.workspace || process.cwd();
     this.trustMode = options.trustMode || "approval";
-    this.agentId = options.agentId || `agent-${Date.now().toString(36)}`;
+    this.agentId = options.resume || options.agentId || `agent-${Date.now().toString(36)}`;
+    this._isResume = !!options.resume;
+    this._runInBackground = !!options.runInBackground;
+    this._isolation = options.isolation || null;
+    this._worktreePath = null; // set during worktree setup
+    this._worktreeBranch = null;
     /** @type {object|null} Agent definition for custom type/tools/prompt */
     this.agentDef = options.agentDef || null;
-    this.client = new MercuryClient({
-      apiKey: options.apiKey,
-      baseURL: options.baseURL,
-    });
+    this._clientOptions = { apiKey: options.apiKey, baseURL: options.baseURL };
+    this.client = new MercuryClient(this._clientOptions);
+
+    // Effective workspace (may be overridden by worktree)
+    this._effectiveWorkspace = this.workspace;
 
     // Initialize sandbox for this sub-agent (inherits from parent config)
     this.sandbox = null;
     if (options.sandboxConfig && options.sandboxConfig.mode !== SANDBOX_OFF) {
       this.sandbox = new Sandbox({
         ...options.sandboxConfig,
-        workspace: this.workspace,
+        workspace: this._effectiveWorkspace,
       });
       this.sandbox.init();
     }
@@ -69,7 +105,7 @@ export class SubAgent {
     this.toolExecutor = new ToolExecutor({
       apiKey: options.apiKey,
       baseURL: options.baseURL,
-      workspace: this.workspace,
+      workspace: this._effectiveWorkspace,
       trustMode: this.trustMode,
       sandbox: this.sandbox,
     });
@@ -78,11 +114,12 @@ export class SubAgent {
     this._onProgress = options.onProgress || null;
 
     // Per-agent persistence: conversation log, memory, rollback
-    // Use direct dir option to avoid double .mercury nesting
     const agentDir = path.join(this.workspace, ".mercury", "agents", this.agentId);
     this.log = new ConversationLog(null, { dir: agentDir });
     this.memory = new MemoryManager(null, { dir: agentDir });
-    this.rollback = new RollbackManager(this.workspace);
+    this.rollback = new RollbackManager(this._effectiveWorkspace);
+    this._agentDir = agentDir;
+    this._transcriptPath = path.join(agentDir, "transcript.json");
   }
 
   /**
@@ -96,18 +133,184 @@ export class SubAgent {
 
   /**
    * Run the sub-agent to completion.
-   * @returns {Promise<string>} The sub-agent's final response
+   * @returns {Promise<string>} The sub-agent's final response (or agentId if background)
    */
   async run() {
     if (runningCount >= MAX_CONCURRENT) {
       return `Error: Maximum concurrent sub-agents (${MAX_CONCURRENT}) reached.`;
     }
 
+    // Setup worktree isolation if requested
+    if (this._isolation === "worktree") {
+      try {
+        await this._setupWorktree();
+      } catch (err) {
+        return `Error setting up worktree: ${err.message}`;
+      }
+    }
+
+    // Background mode: launch and return agentId immediately
+    if (this._runInBackground) {
+      runningCount++;
+      const agentId = this.agentId;
+      // Run in background — store promise for later retrieval
+      this._backgroundPromise = this._execute().then(
+        (result) => {
+          runningCount--;
+          this._saveTranscript(result);
+          this._cleanupWorktree();
+          return result;
+        },
+        (err) => {
+          runningCount--;
+          this._cleanupWorktree();
+          return `Background agent error: ${err.message}`;
+        }
+      );
+      // Track globally for retrieval
+      _backgroundAgents.set(agentId, this);
+      return `Agent launched in background. agentId: ${agentId}\nResume later with: { "resume": "${agentId}", "task": "check results" }`;
+    }
+
     runningCount++;
     try {
-      return await this._execute();
+      const result = await this._execute();
+      await this._saveTranscript(result);
+      await this._cleanupWorktree();
+      return result;
     } finally {
       runningCount--;
+    }
+  }
+
+  /**
+   * Set up a git worktree for isolated execution.
+   */
+  async _setupWorktree() {
+    const branchName = `mercury-worktree-${this.agentId}`;
+    const worktreeDir = path.join(this.workspace, ".mercury", "worktrees", this.agentId);
+
+    try {
+      // Create worktree directory
+      await mkdir(path.dirname(worktreeDir), { recursive: true });
+
+      // Create a new branch and worktree
+      execFileSync("git", ["worktree", "add", "-b", branchName, worktreeDir], {
+        cwd: this.workspace,
+        encoding: "utf-8",
+        timeout: 30000,
+      });
+
+      this._worktreePath = worktreeDir;
+      this._worktreeBranch = branchName;
+      this._effectiveWorkspace = worktreeDir;
+
+      // Update executor workspace
+      this.toolExecutor.workspace = worktreeDir;
+      if (this.sandbox) {
+        this.sandbox.workspace = worktreeDir;
+      }
+      this.rollback = new RollbackManager(worktreeDir);
+
+      this._emit("worktree", `Isolated in ${worktreeDir}`);
+    } catch (err) {
+      throw new Error(`Git worktree creation failed: ${err.message}`);
+    }
+  }
+
+  /**
+   * Clean up worktree after execution. Keep if changes were made.
+   */
+  async _cleanupWorktree() {
+    if (!this._worktreePath) return;
+
+    try {
+      // Check if there are any changes in the worktree
+      const status = execFileSync("git", ["status", "--porcelain"], {
+        cwd: this._worktreePath,
+        encoding: "utf-8",
+        timeout: 10000,
+      }).trim();
+
+      // Check if there are new commits beyond the original branch
+      const logOutput = execFileSync("git", ["log", "--oneline", "HEAD", "^main", "--", "--no-walk"], {
+        cwd: this._worktreePath,
+        encoding: "utf-8",
+        timeout: 10000,
+      }).trim();
+
+      if (!status && !logOutput) {
+        // No changes — clean up
+        execFileSync("git", ["worktree", "remove", this._worktreePath, "--force"], {
+          cwd: this.workspace,
+          encoding: "utf-8",
+          timeout: 15000,
+        });
+        // Delete the temporary branch
+        try {
+          execFileSync("git", ["branch", "-D", this._worktreeBranch], {
+            cwd: this.workspace,
+            encoding: "utf-8",
+            timeout: 10000,
+          });
+        } catch { /* branch may not exist */ }
+        this._emit("worktree_cleanup", "No changes — worktree cleaned up");
+      } else {
+        this._emit("worktree_kept", `Worktree preserved at ${this._worktreePath} (branch: ${this._worktreeBranch})`);
+      }
+    } catch {
+      // Non-critical — leave worktree in place
+    }
+  }
+
+  /**
+   * Save agent transcript (messages + metadata) for resume support.
+   */
+  async _saveTranscript(finalResult) {
+    try {
+      await mkdir(this._agentDir, { recursive: true });
+      const transcript = {
+        agentId: this.agentId,
+        task: this.task,
+        agentType: this.agentDef?.name || "general-purpose",
+        turnCount: this._turnCount,
+        messages: this.messages,
+        finalResult,
+        worktree: this._worktreePath ? {
+          path: this._worktreePath,
+          branch: this._worktreeBranch,
+        } : null,
+        timestamp: Date.now(),
+      };
+      await writeFile(this._transcriptPath, JSON.stringify(transcript, null, 2), "utf-8");
+    } catch {
+      // non-critical
+    }
+  }
+
+  /**
+   * Load a prior transcript for resume.
+   * @returns {Promise<boolean>} Whether a transcript was loaded successfully
+   */
+  async _loadTranscript() {
+    try {
+      const data = await readFile(this._transcriptPath, "utf-8");
+      const transcript = JSON.parse(data);
+      this.messages = transcript.messages || [];
+      this._turnCount = transcript.turnCount || 0;
+      if (transcript.worktree?.path) {
+        this._worktreePath = transcript.worktree.path;
+        this._worktreeBranch = transcript.worktree.branch;
+        // Check if worktree still exists
+        if (fs.existsSync(transcript.worktree.path)) {
+          this._effectiveWorkspace = transcript.worktree.path;
+          this.toolExecutor.workspace = transcript.worktree.path;
+          if (this.sandbox) this.sandbox.workspace = transcript.worktree.path;
+        }
+      }
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -115,17 +318,17 @@ export class SubAgent {
     // Build system prompt: use agent definition's custom prompt if available
     if (this.agentDef?.systemPrompt) {
       this._systemPrompt =
-        buildSystemPrompt(this.workspace, this.trustMode) +
+        buildSystemPrompt(this._effectiveWorkspace, this.trustMode) +
         `\n## Agent Role: ${this.agentDef.name}\n\n${this.agentDef.systemPrompt}\n` +
-        `\nWorkspace: ${this.workspace}\n` +
+        `\nWorkspace: ${this._effectiveWorkspace}\n` +
         `Note: You cannot spawn further sub-agents.\n`;
     } else {
       this._systemPrompt =
-        buildSystemPrompt(this.workspace, this.trustMode) +
+        buildSystemPrompt(this._effectiveWorkspace, this.trustMode) +
         `\n## Sub-Agent Context\n\nYou are a sub-agent spawned by the main agent to handle a specific task. ` +
         `Focus exclusively on completing the assigned task. Be thorough but concise in your final response. ` +
         `Return only the relevant findings or results — the main agent will use your output to continue its work.\n` +
-        `Workspace: ${this.workspace}\n` +
+        `Workspace: ${this._effectiveWorkspace}\n` +
         `Note: You have access to core tools (Read, Write, Edit, Bash, Glob, Grep) but cannot spawn further sub-agents.\n`;
     }
 
@@ -137,15 +340,27 @@ export class SubAgent {
     // Resolve max turns from agent definition
     this._maxTurns = this.agentDef?.maxTurns || MAX_SUB_TURNS;
 
-    this.messages = [
-      { role: "user", content: this.task },
-    ];
+    // Resume: load prior transcript if resuming
+    if (this._isResume) {
+      const loaded = await this._loadTranscript();
+      if (loaded) {
+        // Append new task as a follow-up message
+        this.messages.push({ role: "user", content: this.task });
+        await this.log.append({ role: "user", content: `[RESUMED] ${this.task}` });
+        this._emit("thinking", `Resumed agent ${this.agentId} (${this._turnCount} prior turns)...`);
+      } else {
+        // No transcript found — start fresh
+        this.messages = [{ role: "user", content: this.task }];
+        await this.log.append({ role: "user", content: this.task });
+        this._emit("thinking", "Starting (no prior transcript found)...");
+      }
+    } else {
+      this.messages = [{ role: "user", content: this.task }];
+      await this.log.append({ role: "user", content: this.task });
+      this._emit("thinking", "Starting...");
+    }
 
-    // Log initial task and create rollback checkpoint
-    await this.log.append({ role: "user", content: this.task });
     this.rollback.createCheckpoint(this.task.slice(0, 80), this.messages);
-
-    this._emit("thinking", "Starting...");
 
     while (this._turnCount < this._maxTurns) {
       this._turnCount++;

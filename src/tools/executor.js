@@ -684,7 +684,7 @@ export class ToolExecutor {
    * @returns {string} Sub-agent's final response
    */
   async _subAgent(args) {
-    const { task, agent_type } = args;
+    const { task, agent_type, resume, run_in_background, isolation } = args;
     if (!task) {
       return 'Error: task is required.';
     }
@@ -713,6 +713,9 @@ export class ToolExecutor {
       trustMode: this.trustMode,
       sandboxConfig: this.sandbox?.toSubAgentConfig(),
       agentDef,
+      resume: resume || undefined,
+      runInBackground: run_in_background || false,
+      isolation: isolation || undefined,
     });
     return await agent.run();
   }

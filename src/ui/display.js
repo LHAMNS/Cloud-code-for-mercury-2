@@ -125,6 +125,7 @@ export function printHelp() {
       ["/compact", "Compact/summarize conversation"],
       ["/new", "Start new conversation (saves current)"],
       ["/copy", "Copy last assistant reply to clipboard"],
+      ["/init", "Create .mercury.md project config"],
     ]],
   ];
 

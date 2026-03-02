@@ -1,6 +1,20 @@
 // Mercury Code - System Prompt
 // Concise tool descriptions to minimize token usage while maximizing model understanding
 
+// Cache for project config to avoid re-reading on every prompt build
+let _cachedProjectConfig = null;
+let _cachedProjectConfigCwd = null;
+
+/**
+ * Pre-load project config for a workspace (call once at startup).
+ * @param {string} cwd
+ * @param {string} configContent - Pre-loaded content from loadProjectConfig()
+ */
+export function setProjectConfig(cwd, configContent) {
+  _cachedProjectConfig = configContent || "";
+  _cachedProjectConfigCwd = cwd;
+}
+
 export function buildSystemPrompt(cwd, trustMode, sandbox) {
   const trustNote = _trustSection(trustMode);
   const sandboxNote = _sandboxSection(sandbox);
@@ -23,7 +37,7 @@ Filesystem tools (use absolute paths):
 - **Lsp**(action, file_path?, line?, character?, query?) — Language server: definition, references, hover, symbols, workspace_symbols, diagnostics.
 - **AstSearch**(action, query?, kind?, language?, file_path?) — Structural code search: search (find symbols) or outline (file structure).
 - **ContextSearch**(query, scope?) — Search conversation log for past context. Expensive — last resort only.
-- **SubAgent**(task, agent_type?) — Spawn autonomous sub-agent. Types: explore, plan, general-purpose, or custom.
+- **SubAgent**(task, agent_type?, resume?, run_in_background?, isolation?) — Spawn autonomous sub-agent. Types: explore, plan, general-purpose, or custom. Supports resume by agentId, background execution, and worktree isolation.
 - **SubAgentTeam**(tasks[{task, agent_type?}]) — Run up to 5 sub-agents in parallel.
 
 ## Behavior
@@ -81,6 +95,7 @@ Memory file: \`.mercury/memory.md\` — key facts auto-saved across compressions
 - Working directory: ${cwd}
 - Platform: ${process.platform}
 - Node: ${process.version}
+${_cachedProjectConfigCwd === cwd && _cachedProjectConfig ? _cachedProjectConfig : ""}
 `;
 }
 

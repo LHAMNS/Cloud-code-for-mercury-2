@@ -19,6 +19,8 @@ import { SessionHistory } from "./history.js";
 import { RollbackManager } from "./rollback.js";
 import { Sandbox, SANDBOX_OFF, SANDBOX_ON, SANDBOX_STRICT, SANDBOX_MODES } from "./sandbox.js";
 import { discoverAgents, formatAgentList, scaffoldAgent } from "./agent-definitions.js";
+import { loadProjectConfig, findProjectConfig, scaffoldProjectConfig } from "./project-config.js";
+import { setProjectConfig } from "./system-prompt.js";
 import {
   printWelcome,
   printHelp,
@@ -134,7 +136,7 @@ export class MercuryRepl {
       "/help", "/clear", "/trust", "/workspace", "/reasoning",
       "/supercompress", "/contextsearch", "/sandbox", "/history",
       "/context", "/settings", "/config", "/edit", "/exit",
-      "/agents", "/diff", "/compact", "/new", "/copy",
+      "/agents", "/diff", "/compact", "/new", "/copy", "/init",
     ];
 
     this._rl = readline.createInterface({
@@ -155,6 +157,15 @@ export class MercuryRepl {
     this.memory = new MemoryManager(this.workspace);
     this.log = new ConversationLog(this.workspace);
     this.rollback = new RollbackManager(this.workspace);
+
+    // Load project config (.mercury.md) and inject into system prompt
+    const projectConfig = await loadProjectConfig(this.workspace);
+    setProjectConfig(this.workspace, projectConfig);
+    if (projectConfig) {
+      const configPath = await findProjectConfig(this.workspace);
+      if (configPath) printInfo(`Loaded project config: ${configPath}`);
+    }
+
     this.conversation = new Conversation(buildSystemPrompt(this.workspace, this.trustMode, this.sandbox));
     await this.conversation.loadMemory(this.memory);
 
@@ -1153,6 +1164,10 @@ export class MercuryRepl {
         await this._handleAgents(parts.slice(1));
         break;
 
+      case "/init":
+        await this._handleInit();
+        break;
+
       case "/diff":
         await this._handleDiff(parts.slice(1));
         break;
@@ -1401,6 +1416,23 @@ export class MercuryRepl {
     }
 
     printError(`Unknown /agents option: ${subCmd}. Options: list, create <name>`);
+  }
+
+  // ── /init command ────────────────────────────────────────────────────────
+
+  async _handleInit() {
+    const existing = await findProjectConfig(this.workspace);
+    if (existing) {
+      printInfo(`Project config already exists: ${existing}`);
+      return;
+    }
+    try {
+      const filePath = await scaffoldProjectConfig(this.workspace);
+      printSuccess(`Created project config: ${filePath}`);
+      printInfo("Edit this file to add project-specific instructions for Mercury Code.");
+    } catch (err) {
+      printError(`Error creating config: ${err.message}`);
+    }
   }
 
   // ── /diff command ───────────────────────────────────────────────────────

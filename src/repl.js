@@ -43,6 +43,8 @@ const MAX_TOOL_TURNS = 100;
 const MAX_AUTO_RECOVER = 3;
 // ESC detection: triple-press within this window triggers rollback
 const ESC_WINDOW_MS = 800;
+// Long paste threshold: inputs longer than this get collapsed in display
+const PASTE_COLLAPSE_THRESHOLD = 200;
 
 // Trust modes
 const TRUST_READONLY = "readonly";
@@ -352,6 +354,66 @@ export class MercuryRepl {
 
   // ── Input handling ───────────────────────────────────────────────────────
 
+  /**
+   * Collapse long paste in terminal display.
+   * If input exceeds threshold, clear the echoed lines and show a compact summary.
+   * The full text is still sent to the model.
+   */
+  _collapseLongInput(input) {
+    if (input.length <= PASTE_COLLAPSE_THRESHOLD) return;
+
+    const E = "\x1b[", R = `${E}0m`, D = `${E}2m`;
+    const G = `${E}90m`;
+
+    // Count stats
+    const lineCount = input.split("\n").length;
+    const charCount = input.length;
+    const byteCount = Buffer.byteLength(input, "utf-8");
+
+    // Estimate how many terminal lines were consumed by the echoed paste
+    const termWidth = process.stdout.columns || 80;
+    const inputLines = input.split("\n");
+    let echoedLines = 0;
+    for (const line of inputLines) {
+      echoedLines += Math.max(1, Math.ceil((line.length + 1) / termWidth));
+    }
+
+    // Move cursor up and clear the echoed lines
+    if (echoedLines > 1) {
+      process.stdout.write(`${E}${echoedLines}A`);
+      for (let i = 0; i < echoedLines; i++) {
+        process.stdout.write(`${E}2K\n`);
+      }
+      process.stdout.write(`${E}${echoedLines}A`);
+    } else {
+      // Single long line: clear current line
+      process.stdout.write(`\r${E}2K`);
+    }
+
+    // Show compact summary with first line preview
+    const firstLine = inputLines[0];
+    const preview = firstLine.length > 60 ? firstLine.slice(0, 57) + "..." : firstLine;
+    const sizeStr = byteCount >= 1024
+      ? `${(byteCount / 1024).toFixed(1)}KB`
+      : `${byteCount}B`;
+
+    console.log(
+      `${G}  ┌─ Pasted${R} ${D}${charCount} chars, ${lineCount} line${lineCount > 1 ? "s" : ""}, ${sizeStr}${R}`
+    );
+    console.log(`${G}  │${R} ${D}${preview}${R}`);
+    if (lineCount > 1) {
+      const lastLine = inputLines[lineCount - 1].trim();
+      const lastPreview = lastLine.length > 60 ? lastLine.slice(0, 57) + "..." : lastLine;
+      if (lastPreview) {
+        console.log(`${G}  │${R} ${D}... (${lineCount - 2} more lines)${R}`);
+        console.log(`${G}  │${R} ${D}${lastPreview}${R}`);
+      } else {
+        console.log(`${G}  │${R} ${D}... (${lineCount - 1} more lines)${R}`);
+      }
+    }
+    console.log(`${G}  └─${R}`);
+  }
+
   async _handleInput(input) {
     const trimmed = input.trim();
     if (!trimmed) {
@@ -359,6 +421,9 @@ export class MercuryRepl {
     this._rl.prompt();
       return;
     }
+
+    // Collapse long pasted content in display (full text still used)
+    this._collapseLongInput(trimmed);
 
     if (trimmed.startsWith("/")) {
       await this._handleCommand(trimmed);

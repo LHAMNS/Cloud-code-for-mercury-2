@@ -6,6 +6,8 @@
 import readline from "node:readline";
 import path from "node:path";
 import fs from "node:fs";
+import os from "node:os";
+import { execSync as _execSync } from "node:child_process";
 import { MercuryClient } from "./client.js";
 import { Conversation } from "./conversation.js";
 import { buildSystemPrompt } from "./system-prompt.js";
@@ -127,7 +129,7 @@ export class MercuryRepl {
     const SLASH_CMDS = [
       "/help", "/clear", "/trust", "/workspace", "/reasoning",
       "/supercompress", "/contextsearch", "/sandbox", "/history",
-      "/context", "/settings", "/config", "/exit",
+      "/context", "/settings", "/config", "/edit", "/exit",
     ];
 
     this._rl = readline.createInterface({
@@ -161,13 +163,28 @@ export class MercuryRepl {
       this._setupKeyListener();
     }
 
+    // Ctrl+C abort support: interrupt running tool execution
+    this._aborted = false;
+    process.on("SIGINT", () => {
+      if (this._processing) {
+        this._aborted = true;
+        spinner.stop();
+        printWarning("Interrupted by user (Ctrl+C).");
+      } else {
+        // If not processing, treat as exit hint
+        printInfo("Press Ctrl+C again or type /exit to quit.");
+      }
+    });
+
     this._rl.on("line", async (line) => {
       if (this._processing || this._inRollbackMode) return;
       this._processing = true;
+      this._aborted = false;
       try {
         await this._handleInput(line);
       } finally {
         this._processing = false;
+        this._aborted = false;
       }
     });
 
@@ -329,6 +346,96 @@ export class MercuryRepl {
     });
   }
 
+  // ── Multiline input via $EDITOR ─────────────────────────────────────────
+
+  /**
+   * Open the user's $EDITOR for composing a multiline message.
+   * Triggered by /edit command or when user types just `\`.
+   * @returns {string|null} The composed text, or null if cancelled.
+   */
+  _openEditor() {
+    const editor = process.env.VISUAL || process.env.EDITOR || "vi";
+    const tmpFile = path.join(os.tmpdir(), `mercury-input-${Date.now()}.md`);
+
+    try {
+      // Write a hint to the temp file
+      fs.writeFileSync(tmpFile, "# Type your message below. Save and close the editor to submit.\n# Lines starting with # will be stripped.\n\n");
+
+      // Open editor (blocking)
+      _execSync(`${editor} ${tmpFile}`, { stdio: "inherit" });
+
+      // Read the result
+      const content = fs.readFileSync(tmpFile, "utf-8");
+
+      // Strip comment lines and trim
+      const lines = content.split("\n").filter((l) => !l.startsWith("#"));
+      const result = lines.join("\n").trim();
+
+      return result || null;
+    } catch {
+      return null;
+    } finally {
+      try { fs.unlinkSync(tmpFile); } catch { /* best effort cleanup */ }
+    }
+  }
+
+  // ── @file mention resolver ────────────────────────────────────────────
+
+  /**
+   * Resolve @file mentions in user input.
+   * Syntax: @path/to/file or @./relative/path
+   * Replaces each @mention with the file contents wrapped in a code fence.
+   * Returns the expanded text.
+   */
+  _resolveFileMentions(input) {
+    // Match @file patterns: @./foo.js, @src/bar.ts, @/absolute/path.py
+    // Must be preceded by start-of-string or whitespace
+    const FILE_MENTION_RE = /(?:^|\s)@(\.?\/?\S+)/g;
+    const mentions = [];
+    let match;
+
+    while ((match = FILE_MENTION_RE.exec(input)) !== null) {
+      const rawPath = match[1];
+      const resolvedPath = path.resolve(this.workspace, rawPath);
+      mentions.push({ raw: match[0].trim(), rawPath, resolvedPath });
+    }
+
+    if (mentions.length === 0) return input;
+
+    let expanded = input;
+    for (const m of mentions) {
+      try {
+        const content = fs.readFileSync(m.resolvedPath, "utf-8");
+        const ext = path.extname(m.resolvedPath).slice(1) || "";
+        const relPath = path.relative(this.workspace, m.resolvedPath);
+
+        // Check file size limit (~50KB)
+        if (content.length > 50000) {
+          const truncated = content.slice(0, 50000);
+          expanded = expanded.replace(
+            m.raw,
+            `[File: ${relPath} — ${content.length} chars, truncated to 50K]\n\`\`\`${ext}\n${truncated}\n\`\`\`\n[... truncated ...]`
+          );
+        } else {
+          expanded = expanded.replace(
+            m.raw,
+            `[File: ${relPath}]\n\`\`\`${ext}\n${content}\n\`\`\``
+          );
+        }
+
+        printInfo(`Included @${relPath} (${content.length} chars)`);
+      } catch (err) {
+        if (err.code === "ENOENT") {
+          // Not a real file reference — leave it as-is
+        } else {
+          printWarning(`Could not read @${m.rawPath}: ${err.message}`);
+        }
+      }
+    }
+
+    return expanded;
+  }
+
   // ── Single-shot mode ─────────────────────────────────────────────────────
 
   async runOnce(promptText) {
@@ -415,11 +522,25 @@ export class MercuryRepl {
   }
 
   async _handleInput(input) {
-    const trimmed = input.trim();
+    let trimmed = input.trim();
     if (!trimmed) {
       this._rl.setPrompt(this._buildPrompt());
     this._rl.prompt();
       return;
+    }
+
+    // Backslash alone → open $EDITOR for multiline input
+    if (trimmed === "\\") {
+      printInfo(`Opening ${process.env.VISUAL || process.env.EDITOR || "vi"} for multiline input...`);
+      const editorText = this._openEditor();
+      if (!editorText) {
+        printInfo("Editor cancelled (empty input).");
+        this._rl.setPrompt(this._buildPrompt());
+    this._rl.prompt();
+        return;
+      }
+      trimmed = editorText;
+      printInfo(`Received ${trimmed.length} chars from editor.`);
     }
 
     // Collapse long pasted content in display (full text still used)
@@ -431,6 +552,9 @@ export class MercuryRepl {
     this._rl.prompt();
       return;
     }
+
+    // Resolve @file mentions (expand inline file contents)
+    trimmed = this._resolveFileMentions(trimmed);
 
     this.rollback.createCheckpoint(trimmed, this.conversation.messages);
 
@@ -692,6 +816,14 @@ export class MercuryRepl {
         });
 
         for (const tc of response.tool_calls) {
+          // Check if user pressed Ctrl+C to abort
+          if (this._aborted) {
+            const abortMsg = "Aborted by user (Ctrl+C).";
+            this.conversation.addToolResult(tc.id, abortMsg);
+            printWarning("Remaining tool calls skipped.");
+            break;
+          }
+
           const fnName = tc.function.name;
           let args;
           try {
@@ -739,6 +871,15 @@ export class MercuryRepl {
           const fencedResult = fenceResult(String(result));
           this.conversation.addToolResult(tc.id, fencedResult);
           await this.log.append({ role: "tool", name: fnName, result: String(result) });
+        }
+
+        // If aborted during tool execution, stop the agentic loop
+        if (this._aborted) {
+          this.conversation.addAssistantMessage(
+            response.content || "(Interrupted by user)"
+          );
+          printResponseFooter();
+          return;
         }
 
         continue;
@@ -947,6 +1088,28 @@ export class MercuryRepl {
       case "/settings":
         await this._handleSettings(parts.slice(1));
         break;
+
+      case "/edit": {
+        printInfo(`Opening ${process.env.VISUAL || process.env.EDITOR || "vi"} for multiline input...`);
+        const editorText = this._openEditor();
+        if (!editorText) {
+          printInfo("Editor cancelled (empty input).");
+          break;
+        }
+        printInfo(`Received ${editorText.length} chars from editor.`);
+        // Treat as normal user message
+        const expanded = this._resolveFileMentions(editorText);
+        this.rollback.createCheckpoint(expanded, this.conversation.messages);
+        this.conversation.addUserMessage(expanded);
+        await this.log.append({ role: "user", content: expanded });
+        this._toolTurnCount = 0;
+        try {
+          await this._sendAndProcess();
+        } catch (err) {
+          printError(`Error: ${err.message}`);
+        }
+        break;
+      }
 
       case "/exit":
         await this._gracefulExit();

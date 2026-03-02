@@ -100,6 +100,7 @@ export function printHelp() {
     ["General", [
       ["/help", "Show this help"],
       ["/clear", "Clear conversation"],
+      ["/edit", "Open $EDITOR for multiline input"],
       ["/exit", "Exit Mercury Code"],
     ]],
     ["Security & Workspace", [
@@ -136,8 +137,9 @@ export function printHelp() {
   console.log("");
   console.log(`  ${DIM}Shortcuts:${RESET}`);
   console.log(`    ${YELLOW}ESC×3${RESET}   ${DIM}Enter rollback mode${RESET}`);
-  console.log(`    ${YELLOW}↓${RESET}       ${DIM}Navigate agent tabs (during execution)${RESET}`);
-  console.log(`    ${YELLOW}Ctrl+C${RESET}  ${DIM}Interrupt current operation${RESET}`);
+  console.log(`    ${YELLOW}\\${RESET}       ${DIM}Open $EDITOR for multiline input${RESET}`);
+  console.log(`    ${YELLOW}@file${RESET}   ${DIM}Include file contents in prompt${RESET}`);
+  console.log(`    ${YELLOW}Ctrl+C${RESET}  ${DIM}Abort running tool execution${RESET}`);
   console.log(`    ${YELLOW}Tab${RESET}     ${DIM}Auto-complete slash commands${RESET}`);
   console.log("");
 }

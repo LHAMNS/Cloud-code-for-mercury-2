@@ -132,10 +132,10 @@ export class AgentTeam {
     for (const task of this.tasks.values()) {
       if (task.status !== TASK_PENDING) continue;
 
-      // Check if all dependencies are completed
+      // Check if all dependencies are completed (and not errored)
       const depsComplete = task.depends.every((depId) => {
         const dep = this.tasks.get(depId);
-        return dep && dep.status === TASK_COMPLETED;
+        return dep && dep.status === TASK_COMPLETED && !dep.error;
       });
       if (!depsComplete) continue;
 
@@ -166,14 +166,15 @@ export class AgentTeam {
    * @param {string} taskId
    * @param {string} result
    */
-  completeTask(taskId, result) {
+  completeTask(taskId, result, isError = false) {
     const task = this.tasks.get(taskId);
     if (!task) return;
 
     task.status = TASK_COMPLETED;
     task.result = result;
+    task.error = isError;
     task.completedAt = Date.now();
-    this._emit("task_completed", { taskId, title: task.title });
+    this._emit("task_completed", { taskId, title: task.title, error: isError });
     this._persist();
   }
 
@@ -262,11 +263,11 @@ export class AgentTeam {
    * @param {string} content
    */
   broadcast(from, content) {
-    for (const [id] of this.teammates) {
-      if (id !== from) {
-        this.sendMessage(from, id, content);
-      }
-    }
+    // Send a single "all" message so getMessages() can find it
+    const msg = { from, to: "all", content, ts: Date.now() };
+    this.mailbox.push(msg);
+    this._emit("message_sent", msg);
+    this._persist();
   }
 
   /**
@@ -327,10 +328,11 @@ export class AgentTeam {
             },
             (err) => {
               const errMsg = `Error: ${err.message}`;
-              this.completeTask(task.id, errMsg);
+              this.completeTask(task.id, errMsg, true);
               results.set(task.id, errMsg);
               mate.status = "idle";
               mate.currentTaskId = null;
+              this._emit("teammate_idle", { id, name: mate.name });
             }
           )
         );
@@ -465,6 +467,12 @@ export async function executeAgentTeams(args, executorOptions = {}) {
 
   switch (action) {
     case "create": {
+      if (_activeTeams.size >= 10) {
+        return 'Error: Maximum 10 concurrent teams allowed. Shut down an existing team first.';
+      }
+      if (_activeTeams.has(args.team_name)) {
+        return `Error: Team "${args.team_name}" already exists. Use a different name or shut down the existing team.`;
+      }
       const team = new AgentTeam({
         teamName: args.team_name,
         workspace: executorOptions.workspace,
@@ -495,6 +503,9 @@ export async function executeAgentTeams(args, executorOptions = {}) {
     case "spawn_teammate": {
       const team = _activeTeams.get(args.team_name);
       if (!team) return `Error: Team "${args.team_name}" not found.`;
+      if (team.teammates.size >= 10) {
+        return `Error: Maximum 10 teammates per team. Shut down existing teammates first.`;
+      }
       const mate = team.spawnTeammate({
         name: args.name,
         agentDef: args.agent_def,
@@ -552,6 +563,8 @@ export async function executeAgentTeams(args, executorOptions = {}) {
       for (const [id] of team.teammates) {
         team.shutdownTeammate(id);
       }
+      // Clean up persisted state files
+      team.cleanup();
       _activeTeams.delete(args.team_name);
       return `Team "${args.team_name}" shut down.`;
     }

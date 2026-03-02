@@ -10,7 +10,8 @@
   },
   "scripts": {
     "start": "node cli.js",
-    "dev": "node cli.js --verbose"
+    "dev": "node cli.js --verbose",
+    "test": "node --test test/*.test.js"
   },
   "keywords": [
     "mercury",

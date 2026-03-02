@@ -76,7 +76,8 @@ export class SubAgent {
   constructor(options = {}) {
     this.task = options.task || "";
     this.workspace = options.workspace || process.cwd();
-    this.trustMode = options.trustMode || "approval";
+    // Apply permissionMode override from agent definition if present
+    this.trustMode = options.agentDef?.permissionMode || options.trustMode || "approval";
     this.agentId = options.resume || options.agentId || `agent-${Date.now().toString(36)}`;
     this._isResume = !!options.resume;
     this._runInBackground = !!options.runInBackground;
@@ -85,6 +86,8 @@ export class SubAgent {
     this._worktreeBranch = null;
     /** @type {object|null} Agent definition for custom type/tools/prompt */
     this.agentDef = options.agentDef || null;
+    // Apply model override from agent definition
+    this._modelOverride = options.agentDef?.model || null;
     this._clientOptions = { apiKey: options.apiKey, baseURL: options.baseURL };
     this.client = new MercuryClient(this._clientOptions);
 
@@ -159,12 +162,14 @@ export class SubAgent {
           runningCount--;
           this._saveTranscript(result);
           this._cleanupWorktree();
+          this._backgroundResult = result;
           return result;
         },
         (err) => {
           runningCount--;
           this._cleanupWorktree();
-          return `Background agent error: ${err.message}`;
+          this._backgroundResult = `Background agent error: ${err.message}`;
+          return this._backgroundResult;
         }
       );
       // Track globally for retrieval
@@ -232,8 +237,24 @@ export class SubAgent {
         timeout: 10000,
       }).trim();
 
-      // Check if there are new commits beyond the original branch
-      const logOutput = execFileSync("git", ["log", "--oneline", "HEAD", "^main", "--", "--no-walk"], {
+      // Detect default branch dynamically (main, master, etc.)
+      let defaultBranch = "main";
+      try {
+        defaultBranch = execFileSync("git", ["rev-parse", "--abbrev-ref", "origin/HEAD"], {
+          cwd: this.workspace, encoding: "utf-8", timeout: 5000, stdio: "pipe",
+        }).trim().replace("origin/", "");
+      } catch {
+        try {
+          execFileSync("git", ["rev-parse", "--verify", "main"], {
+            cwd: this.workspace, encoding: "utf-8", timeout: 5000, stdio: "pipe",
+          });
+        } catch {
+          defaultBranch = "master";
+        }
+      }
+
+      // Check if there are new commits beyond the default branch
+      const logOutput = execFileSync("git", ["log", "--oneline", "HEAD", `^${defaultBranch}`], {
         cwd: this._worktreePath,
         encoding: "utf-8",
         timeout: 10000,
@@ -390,11 +411,16 @@ export class SubAgent {
           { role: "system", content: this._systemPrompt },
           ...this.messages,
         ];
-        response = await this.client.chatCompletion(apiMessages, {
+        const apiOpts = {
           tools: this._tools,
           max_tokens: 16000,
           reasoning_effort: "low",
-        });
+        };
+        // Apply model override from agent definition
+        if (this._modelOverride) {
+          apiOpts.model = this._modelOverride;
+        }
+        response = await this.client.chatCompletion(apiMessages, apiOpts);
       } catch (err) {
         this._emit("error", err.message);
         return `Sub-agent API error: ${err.message}`;

@@ -644,6 +644,12 @@ export class ToolExecutor {
 
     const searchDir = basePath || this.workspace;
 
+    // Sandbox path check (read)
+    if (this.sandbox?.enabled) {
+      const check = this.sandbox.checkPath(searchDir, 'read');
+      if (!check.allowed) return `Error: ${check.reason}`;
+    }
+
     try {
       await stat(searchDir);
     } catch (err) {
@@ -680,6 +686,11 @@ export class ToolExecutor {
       return 'Error: pattern is required.';
     }
 
+    // Reject excessively long regex patterns (ReDoS mitigation)
+    if (pattern.length > 500) {
+      return 'Error: Regex pattern too long (max 500 characters).';
+    }
+
     let regex;
     try {
       regex = new RegExp(pattern);
@@ -688,6 +699,13 @@ export class ToolExecutor {
     }
 
     const targetPath = searchPath || this.workspace;
+
+    // Sandbox path check (read)
+    if (this.sandbox?.enabled) {
+      const check = this.sandbox.checkPath(targetPath, 'read');
+      if (!check.allowed) return `Error: ${check.reason}`;
+    }
+
     const results = [];
     const MAX_RESULTS = 1000;
 
@@ -832,9 +850,12 @@ export class ToolExecutor {
     }
 
     // Gate advanced sub-agent features through labs
+    // Apply frontmatter defaults from agentDef if caller didn't specify
     const effectiveResume = (resume && labs.isActive("agent-resume")) ? resume : undefined;
-    const effectiveBackground = (run_in_background && labs.isActive("agent-background")) ? true : false;
-    const effectiveIsolation = (isolation && labs.isActive("agent-worktree")) ? isolation : undefined;
+    const wantBackground = run_in_background || (agentDef?.background === true);
+    const effectiveBackground = (wantBackground && labs.isActive("agent-background")) ? true : false;
+    const wantIsolation = isolation || agentDef?.isolation || null;
+    const effectiveIsolation = (wantIsolation && labs.isActive("agent-worktree")) ? wantIsolation : undefined;
 
     if (resume && !labs.isActive("agent-resume")) {
       return 'Error: Agent resume requires labs. Enable with /labs on then /labs agent-resume on';
@@ -932,6 +953,12 @@ export class ToolExecutor {
     const dirPath = args.path || this.workspace;
     const maxDepth = Math.min(args.max_depth || 1, 5);
     const showHidden = args.show_hidden || false;
+
+    // Sandbox path check (read)
+    if (this.sandbox?.enabled) {
+      const check = this.sandbox.checkPath(dirPath, 'read');
+      if (!check.allowed) return `Error: ${check.reason}`;
+    }
 
     try {
       await stat(dirPath);
@@ -1261,6 +1288,12 @@ export class ToolExecutor {
     const { action, file_path, line, character, query } = args;
     if (!action) return 'Error: action is required (definition, references, hover, symbols, workspace_symbols, diagnostics).';
 
+    // Validate file_path is within workspace (LSP is read-only but should respect sandbox)
+    if (file_path && this.sandbox?.enabled) {
+      const check = this.sandbox.checkPath(file_path, 'read');
+      if (!check.allowed) return `Error: ${check.reason}`;
+    }
+
     // Lazy init LspClient
     if (!this._lspClient) {
       this._lspClient = new LspClient(this.workspace);
@@ -1315,6 +1348,12 @@ export class ToolExecutor {
   async _astSearch(args) {
     const { action, query, kind, language, file_path } = args;
     if (!action) return 'Error: action is required (search or outline).';
+
+    // Validate file_path is within workspace if sandbox is active
+    if (file_path && this.sandbox?.enabled) {
+      const check = this.sandbox.checkPath(file_path, 'read');
+      if (!check.allowed) return `Error: ${check.reason}`;
+    }
 
     try {
       switch (action) {

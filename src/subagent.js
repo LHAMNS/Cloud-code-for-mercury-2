@@ -19,6 +19,20 @@ const SUB_AGENT_TOOLS = TOOL_DEFINITIONS.filter(
   (t) => !["SubAgent", "SubAgentTeam", "ContextSearch"].includes(t.function.name)
 );
 
+// Read-only tools (safe in all modes)
+const READ_TOOL_NAMES = new Set(["Read", "Glob", "Grep", "ListDir", "Diff", "Fetch"]);
+
+/**
+ * Get the filtered tool set for a given trust mode.
+ * In readonly mode, sub-agents only get read tools.
+ */
+function getToolsForTrustMode(trustMode) {
+  if (trustMode === "readonly") {
+    return SUB_AGENT_TOOLS.filter((t) => READ_TOOL_NAMES.has(t.function.name));
+  }
+  return SUB_AGENT_TOOLS;
+}
+
 // Track running sub-agents globally for concurrency control
 let runningCount = 0;
 
@@ -32,17 +46,24 @@ export class SubAgent {
    * @param {string} options.task - Description of what this sub-agent should do
    * @param {string} [options.apiKey] - API key
    * @param {string} [options.baseURL] - API base URL
+   * @param {string} [options.workspace] - Workspace root directory
+   * @param {string} [options.trustMode] - Trust mode: 'readonly', 'approval', 'open'
    * @param {Function} [options.onProgress] - Callback: (event, detail) => void
    */
   constructor(options = {}) {
     this.task = options.task || "";
+    this.workspace = options.workspace || process.cwd();
+    this.trustMode = options.trustMode || "approval";
     this.client = new MercuryClient({
       apiKey: options.apiKey,
       baseURL: options.baseURL,
     });
+    // Pass workspace and trustMode to ToolExecutor for enforcement
     this.toolExecutor = new ToolExecutor({
       apiKey: options.apiKey,
       baseURL: options.baseURL,
+      workspace: this.workspace,
+      trustMode: this.trustMode,
     });
     this.messages = [];
     this._turnCount = 0;
@@ -77,10 +98,11 @@ export class SubAgent {
 
   async _execute() {
     this._systemPrompt =
-      buildSystemPrompt(process.cwd()) +
+      buildSystemPrompt(this.workspace, this.trustMode) +
       `\n## Sub-Agent Context\n\nYou are a sub-agent spawned by the main agent to handle a specific task. ` +
       `Focus exclusively on completing the assigned task. Be thorough but concise in your final response. ` +
       `Return only the relevant findings or results — the main agent will use your output to continue its work.\n` +
+      `Workspace: ${this.workspace}\n` +
       `Note: You have access to core tools (Read, Write, Edit, Bash, Glob, Grep) but cannot spawn further sub-agents.\n`;
 
     this.messages = [
@@ -115,7 +137,7 @@ export class SubAgent {
           ...this.messages,
         ];
         response = await this.client.chatCompletion(apiMessages, {
-          tools: SUB_AGENT_TOOLS,
+          tools: getToolsForTrustMode(this.trustMode),
           max_tokens: 16000,
           reasoning_effort: "low",
         });
@@ -214,13 +236,15 @@ function _trunc(s, max) {
  * @returns {Promise<string[]>} Array of results from each sub-agent
  */
 export async function runSubAgentTeam(tasks, options = {}) {
-  const { onAgentProgress, ...restOptions } = options;
+  const { onAgentProgress, workspace, trustMode, ...restOptions } = options;
 
   const agents = tasks.map(
     (t, i) =>
       new SubAgent({
         task: typeof t === "string" ? t : t.task,
         ...restOptions,
+        workspace,
+        trustMode,
         onProgress: onAgentProgress
           ? (event, detail) => onAgentProgress(i, event, detail)
           : null,

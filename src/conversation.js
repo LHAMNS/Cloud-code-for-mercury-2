@@ -39,6 +39,13 @@ export class Conversation {
     return [{ role: "system", content: sysContent }, ...this.messages];
   }
 
+  /**
+   * Update the system prompt (e.g., when trust mode or workspace changes).
+   */
+  updateSystemPrompt(newPrompt) {
+    this.systemPrompt = newPrompt;
+  }
+
   clear() {
     this.messages = [];
     this._lastActualUsage = null;

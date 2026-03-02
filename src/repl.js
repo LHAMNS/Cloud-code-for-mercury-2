@@ -5,6 +5,7 @@
 
 import readline from "node:readline";
 import path from "node:path";
+import fs from "node:fs";
 import { MercuryClient } from "./client.js";
 import { Conversation } from "./conversation.js";
 import { buildSystemPrompt } from "./system-prompt.js";
@@ -45,18 +46,14 @@ const TRUST_READONLY = "readonly";
 const TRUST_APPROVAL = "approval";
 const TRUST_OPEN = "open";
 
-// Read-only tools (allowed in all modes)
-const READ_TOOLS = new Set(["Read", "Glob", "Grep", "ListDir", "Diff", "Fetch"]);
+// Read-only tools (allowed in all modes). Fetch is handled separately due to POST restrictions.
+const READ_TOOLS = new Set(["Read", "Glob", "Grep", "ListDir", "Diff"]);
 // Write tools (need checking in approval mode)
 const WRITE_TOOLS = new Set(["Write", "Edit", "Patch"]);
 
 export class MercuryRepl {
   constructor(options = {}) {
     this.client = new MercuryClient(options);
-    this.toolExecutor = new ToolExecutor({
-      apiKey: options.apiKey,
-      baseURL: options.baseURL,
-    });
     this.verbose = options.verbose || false;
     this.superCompress = false;
     this.contextSearchEnabled = false;
@@ -69,6 +66,14 @@ export class MercuryRepl {
     this.workspace = options.workspace || process.cwd();
     this.trustMode = options.trustMode || TRUST_APPROVAL;
     this.allowOutsideWorkspace = false;
+
+    // ToolExecutor receives workspace + trustMode for enforcement
+    this.toolExecutor = new ToolExecutor({
+      apiKey: options.apiKey,
+      baseURL: options.baseURL,
+      workspace: this.workspace,
+      trustMode: this.trustMode,
+    });
 
     // These will be initialized after workspace is chosen
     this.memory = null;
@@ -254,7 +259,21 @@ export class MercuryRepl {
   // ── Permission check ─────────────────────────────────────────────────────
 
   _checkPermission(toolName, args) {
-    // Read tools always allowed
+    // Fetch: special handling — allow GET in all modes, restrict POST/body in readonly
+    if (toolName === "Fetch") {
+      if (this.trustMode === TRUST_READONLY) {
+        const method = (args.method || "GET").toUpperCase();
+        if (method !== "GET") {
+          return { allowed: false, needsApproval: false, reason: `Read-only mode: only GET requests allowed (attempted ${method})` };
+        }
+        if (args.body) {
+          return { allowed: false, needsApproval: false, reason: "Read-only mode: request body not allowed" };
+        }
+      }
+      return { allowed: true, needsApproval: false };
+    }
+
+    // Other read tools always allowed
     if (READ_TOOLS.has(toolName) || toolName === "ContextSearch") {
       return { allowed: true, needsApproval: false };
     }
@@ -272,16 +291,15 @@ export class MercuryRepl {
       return { allowed: false, needsApproval: false, reason: `Read-only mode: ${toolName} blocked` };
     }
 
-    // Check workspace boundary for file operations
+    // Check workspace boundary for file operations (symlink-safe)
     const filePath = args.file_path || args.path;
     if (filePath && WRITE_TOOLS.has(toolName)) {
-      const resolved = path.resolve(filePath);
-      const inWorkspace = resolved.startsWith(this.workspace + path.sep) || resolved === this.workspace;
+      const inWorkspace = this._isInWorkspace(filePath);
       if (!inWorkspace && !this.allowOutsideWorkspace) {
         if (this.trustMode === TRUST_OPEN) {
-          return { allowed: false, needsApproval: false, reason: `Outside workspace: ${resolved}` };
+          return { allowed: false, needsApproval: false, reason: `Outside workspace: ${path.resolve(filePath)}` };
         }
-        return { allowed: true, needsApproval: true, reason: `File outside workspace: ${resolved}` };
+        return { allowed: true, needsApproval: true, reason: `File outside workspace: ${path.resolve(filePath)}` };
       }
     }
 
@@ -296,6 +314,29 @@ export class MercuryRepl {
     }
 
     return { allowed: true, needsApproval: false };
+  }
+
+  /**
+   * Symlink-safe workspace boundary check.
+   * Uses fs.realpathSync to resolve symlinks before comparison.
+   */
+  _isInWorkspace(filePath) {
+    try {
+      const resolvedWorkspace = fs.realpathSync(this.workspace);
+      let resolvedPath;
+      try {
+        resolvedPath = fs.realpathSync(filePath);
+      } catch {
+        resolvedPath = path.resolve(filePath);
+      }
+      return resolvedPath === resolvedWorkspace ||
+        resolvedPath.startsWith(resolvedWorkspace + path.sep);
+    } catch {
+      const resolvedPath = path.resolve(filePath);
+      const resolvedWorkspace = path.resolve(this.workspace);
+      return resolvedPath === resolvedWorkspace ||
+        resolvedPath.startsWith(resolvedWorkspace + path.sep);
+    }
   }
 
   async _requestApproval(toolName, args, reason) {
@@ -613,6 +654,9 @@ export class MercuryRepl {
           printError(`Unknown mode: ${mode}`);
           break;
         }
+        // Update ToolExecutor and rebuild system prompt
+        this.toolExecutor.trustMode = this.trustMode;
+        this.conversation.updateSystemPrompt(buildSystemPrompt(this.workspace, this.trustMode));
         printSuccess(`Trust: ${this._trustLabel(this.trustMode)}`);
         break;
       }
@@ -627,6 +671,9 @@ export class MercuryRepl {
         this.memory = new MemoryManager(this.workspace);
         this.log = new ConversationLog(this.workspace);
         this.rollback = new RollbackManager(this.workspace);
+        // Update ToolExecutor and rebuild system prompt
+        this.toolExecutor.workspace = this.workspace;
+        this.conversation.updateSystemPrompt(buildSystemPrompt(this.workspace, this.trustMode));
         printSuccess(`Workspace: ${this.workspace}`);
         break;
       }

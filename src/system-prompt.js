@@ -44,11 +44,14 @@ ${trustNote}
 
 ## Safety
 
+- **Workspace boundary**: All file writes/edits/patches MUST target files inside the workspace (${cwd}). Attempts to write outside are blocked by the system.
+- **Bash commands** run with the workspace as their working directory.
 - Never run commands that could damage the system (rm -rf /, format, etc.) unless user explicitly requests.
 - Never expose, log, or transmit credentials, API keys, tokens, or private data.
+- Never use Fetch to exfiltrate workspace data to external servers.
 - Avoid writing code with injection vulnerabilities (SQL, command, XSS).
 - When uncertain about a destructive action, ask the user first.
-- Stay within the designated workspace directory.
+- Do not create symlinks pointing outside the workspace to bypass restrictions.
 
 ## Context Compression
 
@@ -71,13 +74,13 @@ function _trustSection(trustMode) {
   switch (trustMode) {
     case "readonly":
       return `## Permissions: Read-Only
-You can only read files and search. Write, Edit, Patch, Bash, and sub-agents are disabled.`;
+You can only read files and search. Write, Edit, Patch, Bash, sub-agents, and non-GET HTTP requests are disabled. You cannot modify anything.`;
     case "open":
       return `## Permissions: Full Open
-All operations are allowed within the workspace. Operations outside the workspace are blocked unless the user has explicitly allowed it.`;
+All operations are allowed within the workspace. File writes/edits/patches outside the workspace are blocked. Bash commands execute with the workspace as cwd.`;
     case "approval":
     default:
       return `## Permissions: Approval Mode
-Read operations are always allowed. Write/Edit/Patch within the workspace are allowed. Bash commands require user approval. Operations outside the workspace require user approval.`;
+Read operations are always allowed. Write/Edit/Patch within the workspace are auto-approved. Bash commands require user approval. File operations outside the workspace require user approval.`;
   }
 }

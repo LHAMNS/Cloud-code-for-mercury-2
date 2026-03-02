@@ -1,4 +1,5 @@
-import { readFile, writeFile, mkdir, readdir, stat } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, readdir, stat, realpath } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { execSync, execFileSync } from 'node:child_process';
 import http from 'node:http';
 import https from 'node:https';
@@ -121,9 +122,43 @@ export class ToolExecutor {
    * @param {object} [options] - Options to pass down to sub-agents
    * @param {string} [options.apiKey] - API key for sub-agent calls
    * @param {string} [options.baseURL] - API base URL for sub-agent calls
+   * @param {string} [options.workspace] - Workspace root directory
+   * @param {string} [options.trustMode] - Trust mode: 'readonly', 'approval', 'open'
    */
   constructor(options = {}) {
-    this._clientOptions = options;
+    this._clientOptions = {
+      apiKey: options.apiKey,
+      baseURL: options.baseURL,
+    };
+    this.workspace = options.workspace || process.cwd();
+    this.trustMode = options.trustMode || 'approval';
+  }
+
+  /**
+   * Check if a path is within the workspace (symlink-safe).
+   * Uses realpathSync to resolve symlinks before comparison.
+   * @param {string} filePath - Path to check
+   * @returns {boolean}
+   */
+  _isInWorkspace(filePath) {
+    try {
+      const resolvedWorkspace = realpathSync(this.workspace);
+      // Try realpath first; if file doesn't exist yet, fall back to path.resolve
+      let resolvedPath;
+      try {
+        resolvedPath = realpathSync(filePath);
+      } catch {
+        resolvedPath = path.resolve(filePath);
+      }
+      return resolvedPath === resolvedWorkspace ||
+        resolvedPath.startsWith(resolvedWorkspace + path.sep);
+    } catch {
+      // If workspace itself doesn't exist, fall back to path.resolve
+      const resolvedPath = path.resolve(filePath);
+      const resolvedWorkspace = path.resolve(this.workspace);
+      return resolvedPath === resolvedWorkspace ||
+        resolvedPath.startsWith(resolvedWorkspace + path.sep);
+    }
   }
 
   /**
@@ -247,6 +282,14 @@ export class ToolExecutor {
       return 'Error: content is required.';
     }
 
+    // Enforce workspace boundary for writes
+    if (this.trustMode === 'readonly') {
+      return 'Error: Write is disabled in read-only mode.';
+    }
+    if (!this._isInWorkspace(file_path)) {
+      return `Error: Write blocked — path is outside workspace: ${file_path}`;
+    }
+
     try {
       const dir = path.dirname(file_path);
       await mkdir(dir, { recursive: true });
@@ -284,6 +327,14 @@ export class ToolExecutor {
     }
     if (old_string === new_string) {
       return 'Error: old_string and new_string must be different.';
+    }
+
+    // Enforce workspace boundary for edits
+    if (this.trustMode === 'readonly') {
+      return 'Error: Edit is disabled in read-only mode.';
+    }
+    if (!this._isInWorkspace(file_path)) {
+      return `Error: Edit blocked — path is outside workspace: ${file_path}`;
     }
 
     let content;
@@ -353,6 +404,11 @@ export class ToolExecutor {
       return 'Error: command is required.';
     }
 
+    // Readonly mode: block all Bash execution
+    if (this.trustMode === 'readonly') {
+      return 'Error: Bash is disabled in read-only mode.';
+    }
+
     try {
       const result = execSync(command, {
         encoding: 'utf-8',
@@ -360,6 +416,7 @@ export class ToolExecutor {
         maxBuffer: 10 * 1024 * 1024, // 10 MB
         stdio: ['pipe', 'pipe', 'pipe'],
         shell: true,
+        cwd: this.workspace, // Enforce workspace as working directory
         env: process.env,
       });
       return result || '(command completed with no output)';
@@ -566,7 +623,16 @@ export class ToolExecutor {
       return 'Error: task is required.';
     }
 
-    const agent = new SubAgent({ task, ...this._clientOptions });
+    if (this.trustMode === 'readonly') {
+      return 'Error: Sub-agents are disabled in read-only mode.';
+    }
+
+    const agent = new SubAgent({
+      task,
+      ...this._clientOptions,
+      workspace: this.workspace,
+      trustMode: this.trustMode,
+    });
     return await agent.run();
   }
 
@@ -580,6 +646,14 @@ export class ToolExecutor {
     if (!file_path) return 'Error: file_path is required.';
     if (!edits || !Array.isArray(edits) || edits.length === 0) {
       return 'Error: edits array is required and must not be empty.';
+    }
+
+    // Enforce workspace boundary for patches
+    if (this.trustMode === 'readonly') {
+      return 'Error: Patch is disabled in read-only mode.';
+    }
+    if (!this._isInWorkspace(file_path)) {
+      return `Error: Patch blocked — path is outside workspace: ${file_path}`;
     }
 
     let content;
@@ -770,6 +844,16 @@ export class ToolExecutor {
       return `Error: Too many redirects (>${MAX_REDIRECTS})`;
     }
 
+    // In readonly mode, only allow GET without body (prevent data exfiltration)
+    if (this.trustMode === 'readonly') {
+      if (method.toUpperCase() !== 'GET') {
+        return `Error: Only GET requests are allowed in read-only mode (attempted ${method.toUpperCase()}).`;
+      }
+      if (body) {
+        return 'Error: Request body is not allowed in read-only mode.';
+      }
+    }
+
     return new Promise((resolve) => {
       const parsedUrl = new URL(url);
       const lib = parsedUrl.protocol === 'https:' ? https : http;
@@ -842,6 +926,10 @@ export class ToolExecutor {
       return 'Error: Maximum 5 sub-agents allowed per team.';
     }
 
+    if (this.trustMode === 'readonly') {
+      return 'Error: Sub-agents are disabled in read-only mode.';
+    }
+
     // Create panel manager for live display
     const panels = new AgentPanelManager(tasks.length);
     panels.init(tasks);
@@ -850,6 +938,8 @@ export class ToolExecutor {
     try {
       results = await runSubAgentTeam(tasks, {
         ...this._clientOptions,
+        workspace: this.workspace,
+        trustMode: this.trustMode,
         onAgentProgress: (agentIndex, event, detail) => {
           if (event === 'done' || event === 'error') {
             panels.finish(agentIndex, event === 'done', detail);

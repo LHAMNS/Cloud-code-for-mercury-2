@@ -11,6 +11,8 @@ import { Sandbox, SANDBOX_OFF } from '../sandbox.js';
 import { LspClient, formatLocations, formatSymbols } from '../lsp.js';
 import { searchSymbols, fileOutline, formatSearchResults } from '../ast-search.js';
 import { discoverAgents, matchAgentForTask } from '../agent-definitions.js';
+import { executeAgentTeams } from '../agent-teams.js';
+import { labs } from '../labs.js';
 
 // ── Sanitized environment for child processes ────────────────────────────────
 // Strip keys that commonly hold secrets to prevent exfiltration via Bash
@@ -222,6 +224,7 @@ export class ToolExecutor {
       contextsearch: '_contextSearch',
       lsp: '_lsp',
       astsearch: '_astSearch',
+      agentteams: '_agentTeams',
     };
 
     const handler = handlers[toolName.toLowerCase()];
@@ -706,6 +709,21 @@ export class ToolExecutor {
       agentDef = matchAgentForTask(agents, task);
     }
 
+    // Gate advanced sub-agent features through labs
+    const effectiveResume = (resume && labs.isActive("agent-resume")) ? resume : undefined;
+    const effectiveBackground = (run_in_background && labs.isActive("agent-background")) ? true : false;
+    const effectiveIsolation = (isolation && labs.isActive("agent-worktree")) ? isolation : undefined;
+
+    if (resume && !labs.isActive("agent-resume")) {
+      return 'Error: Agent resume requires labs. Enable with /labs on then /labs agent-resume on';
+    }
+    if (run_in_background && !labs.isActive("agent-background")) {
+      return 'Error: Background agents require labs. Enable with /labs on then /labs agent-background on';
+    }
+    if (isolation && !labs.isActive("agent-worktree")) {
+      return 'Error: Worktree isolation requires labs. Enable with /labs on then /labs agent-worktree on';
+    }
+
     const agent = new SubAgent({
       task,
       ...this._clientOptions,
@@ -713,9 +731,9 @@ export class ToolExecutor {
       trustMode: this.trustMode,
       sandboxConfig: this.sandbox?.toSubAgentConfig(),
       agentDef,
-      resume: resume || undefined,
-      runInBackground: run_in_background || false,
-      isolation: isolation || undefined,
+      resume: effectiveResume,
+      runInBackground: effectiveBackground,
+      isolation: effectiveIsolation,
     });
     return await agent.run();
   }
@@ -1085,6 +1103,24 @@ export class ToolExecutor {
     });
 
     return formatted.join('\n\n');
+  }
+
+  // ── Agent Teams ──────────────────────────────────────────────────────────────
+
+  /**
+   * Collaborative agent teams with shared task list and mailbox.
+   */
+  async _agentTeams(args) {
+    if (this.trustMode === 'readonly') {
+      return 'Error: Agent teams are disabled in read-only mode.';
+    }
+    return await executeAgentTeams(args, {
+      workspace: this.workspace,
+      apiKey: this._clientOptions.apiKey,
+      baseURL: this._clientOptions.baseURL,
+      trustMode: this.trustMode,
+      sandboxConfig: this.sandbox?.toSubAgentConfig(),
+    });
   }
 
   // ── LSP ────────────────────────────────────────────────────────────────────

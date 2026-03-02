@@ -21,6 +21,7 @@ import { Sandbox, SANDBOX_OFF, SANDBOX_ON, SANDBOX_STRICT, SANDBOX_MODES } from 
 import { discoverAgents, formatAgentList, scaffoldAgent } from "./agent-definitions.js";
 import { loadProjectConfig, findProjectConfig, scaffoldProjectConfig } from "./project-config.js";
 import { setProjectConfig } from "./system-prompt.js";
+import { labs } from "./labs.js";
 import {
   printWelcome,
   printHelp,
@@ -136,7 +137,7 @@ export class MercuryRepl {
       "/help", "/clear", "/trust", "/workspace", "/reasoning",
       "/supercompress", "/contextsearch", "/sandbox", "/history",
       "/context", "/settings", "/config", "/edit", "/exit",
-      "/agents", "/diff", "/compact", "/new", "/copy", "/init",
+      "/agents", "/diff", "/compact", "/new", "/copy", "/init", "/labs",
     ];
 
     this._rl = readline.createInterface({
@@ -158,12 +159,17 @@ export class MercuryRepl {
     this.log = new ConversationLog(this.workspace);
     this.rollback = new RollbackManager(this.workspace);
 
-    // Load project config (.mercury.md) and inject into system prompt
-    const projectConfig = await loadProjectConfig(this.workspace);
-    setProjectConfig(this.workspace, projectConfig);
-    if (projectConfig) {
-      const configPath = await findProjectConfig(this.workspace);
-      if (configPath) printInfo(`Loaded project config: ${configPath}`);
+    // Load labs state
+    await labs.load();
+
+    // Load project config (.mercury.md) — only if labs feature is active
+    if (labs.isActive("project-config")) {
+      const projectConfig = await loadProjectConfig(this.workspace);
+      setProjectConfig(this.workspace, projectConfig);
+      if (projectConfig) {
+        const configPath = await findProjectConfig(this.workspace);
+        if (configPath) printInfo(`Loaded project config: ${configPath}`);
+      }
     }
 
     this.conversation = new Conversation(buildSystemPrompt(this.workspace, this.trustMode, this.sandbox));
@@ -791,9 +797,13 @@ export class MercuryRepl {
         const chunks = [];
         let firstChunk = true;
 
+        // Filter tools through labs system
+        const labsFiltered = TOOL_DEFINITIONS.filter((t) => labs.isToolAllowed(t.function.name));
+
+        // Legacy ContextSearch toggle (kept for backwards compat, also gated by labs)
         const activeTools = this.contextSearchEnabled
-          ? TOOL_DEFINITIONS
-          : TOOL_DEFINITIONS.filter((t) => t.function.name !== "ContextSearch");
+          ? labsFiltered
+          : labsFiltered.filter((t) => t.function.name !== "ContextSearch");
 
         // In readonly mode, only allow read tools
         const permittedTools = this.trustMode === TRUST_READONLY
@@ -1164,6 +1174,10 @@ export class MercuryRepl {
         await this._handleAgents(parts.slice(1));
         break;
 
+      case "/labs":
+        await this._handleLabs(parts.slice(1));
+        break;
+
       case "/init":
         await this._handleInit();
         break;
@@ -1271,6 +1285,7 @@ export class MercuryRepl {
         ["sandbox", `${sandboxStatus.mode} (${sandboxStatus.backend})`],
         ["supercompress", this.superCompress ? "ON" : "OFF"],
         ["contextsearch", this.contextSearchEnabled ? "ON" : "OFF"],
+        ["labs", labs.enabled ? "ON" : "OFF"],
       ];
       for (const [k, v] of rows) {
         console.log(`${G}  \u2502${R}  ${GR}${k.padEnd(15)}${R} ${D}${v}${R}`);
@@ -1416,6 +1431,74 @@ export class MercuryRepl {
     }
 
     printError(`Unknown /agents option: ${subCmd}. Options: list, create <name>`);
+  }
+
+  // ── /labs command ────────────────────────────────────────────────────────
+
+  async _handleLabs(args) {
+    const G = "\x1b[90m", R = "\x1b[0m", C = "\x1b[38;5;87m", B = "\x1b[1m";
+    const GR = "\x1b[32m", RD = "\x1b[31m", YL = "\x1b[33m", D = "\x1b[2m";
+
+    const subCmd = args[0]?.toLowerCase();
+
+    // /labs — show all features
+    if (!subCmd) {
+      console.log("");
+      console.log(`${B}${C}  ╭─ Labs (Experimental Features) ${"─".repeat(28)}╮${R}`);
+      console.log(`${G}  │${R}  Master switch: ${labs.enabled ? `${GR}${B}ON${R}` : `${RD}OFF${R}`}${D}    (/labs on|off)${R}`);
+      console.log(`${G}  │${R}`);
+
+      const snapshot = labs.snapshot();
+      let lastCategory = "";
+      for (const feat of snapshot) {
+        if (feat.category !== lastCategory) {
+          lastCategory = feat.category;
+          console.log(`${G}  │${R}  ${B}${C}${feat.category}${R}`);
+        }
+        const statusIcon = feat.active ? `${GR}●${R}` : feat.enabled ? `${YL}○${R}` : `${RD}○${R}`;
+        const statusText = feat.active ? `${GR}active${R}` : feat.blocked ? `${D}${feat.blocked}${R}` : `${RD}off${R}`;
+        const tools = feat.tools.length > 0 ? `${D} [${feat.tools.join(", ")}]${R}` : "";
+        console.log(`${G}  │${R}   ${statusIcon} ${feat.name.padEnd(28)} ${statusText}${tools}`);
+        console.log(`${G}  │${R}     ${D}${feat.desc}${R}`);
+      }
+      console.log(`${G}  │${R}`);
+      console.log(`${G}  │${R}  ${D}Toggle: /labs <feature-id> [on|off]${R}`);
+      console.log(`${G}  │${R}  ${D}IDs: ${snapshot.map((f) => f.id).join(", ")}${R}`);
+      console.log(`${B}${C}  ╰${"─".repeat(55)}╯${R}`);
+      console.log("");
+      return;
+    }
+
+    // /labs on — enable master switch
+    if (subCmd === "on") {
+      labs.enableLabs();
+      printSuccess("Labs mode: ON — experimental features available");
+      return;
+    }
+
+    // /labs off — disable master switch
+    if (subCmd === "off") {
+      labs.disableLabs();
+      printInfo("Labs mode: OFF — all experimental features disabled");
+      return;
+    }
+
+    // /labs <feature-id> [on|off] — toggle specific feature
+    const featureId = subCmd;
+    const valueArg = args[1]?.toLowerCase();
+    const explicitValue = valueArg === "on" ? true : valueArg === "off" ? false : undefined;
+
+    const result = labs.toggle(featureId, explicitValue);
+    if (result.ok) {
+      if (!labs.enabled) {
+        printWarning("Note: Labs master switch is OFF. Enable with /labs on");
+      }
+      printSuccess(result.message);
+    } else {
+      printError(result.message);
+      const features = labs.getFeatures();
+      printInfo(`Available IDs: ${features.map((f) => f.id).join(", ")}`);
+    }
   }
 
   // ── /init command ────────────────────────────────────────────────────────

@@ -113,6 +113,7 @@ export function printHelp() {
       ["/config", "Show raw config (read-only)"],
     ]],
     ["Features", [
+      ["/labs [feature]", "Labs mode — toggle experimental features"],
       ["/sandbox [mode]", "on | off | strict | subagents | network"],
       ["/supercompress", "Toggle aggressive compression"],
       ["/contextsearch", "Toggle context search tool"],

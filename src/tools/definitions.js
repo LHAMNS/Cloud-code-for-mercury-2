@@ -600,6 +600,69 @@ const AstSearchTool = {
 };
 
 /**
+ * Collaborative agent teams with shared task list and inter-agent messaging.
+ */
+const AgentTeamsTool = {
+  type: "function",
+  function: {
+    name: "AgentTeams",
+    description:
+      "Create and manage collaborative agent teams. Teams consist of a lead (you) " +
+      "and multiple teammates (sub-agents). Teammates work on shared tasks, " +
+      "communicate via mailbox messages, and can declare task dependencies. " +
+      "Actions: create (new team), add_task (define work), spawn_teammate (add agent), " +
+      "message (DM a teammate), broadcast (message all), run (execute all tasks), " +
+      "status (check progress), shutdown (end team). " +
+      "Use this for complex work requiring discussion and collaboration between agents.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          description:
+            "The team action: 'create', 'add_task', 'spawn_teammate', 'message', " +
+            "'broadcast', 'run', 'status', 'shutdown'.",
+        },
+        team_name: {
+          type: "string",
+          description: "Name of the team (required for all actions).",
+        },
+        title: {
+          type: "string",
+          description: "Task title (for add_task).",
+        },
+        detail: {
+          type: "string",
+          description: "Detailed task prompt (for add_task).",
+        },
+        depends: {
+          type: "array",
+          items: { type: "string" },
+          description: "Task IDs this task depends on (for add_task).",
+        },
+        name: {
+          type: "string",
+          description: "Teammate display name (for spawn_teammate).",
+        },
+        to: {
+          type: "string",
+          description: "Recipient teammate ID (for message).",
+        },
+        from: {
+          type: "string",
+          description: "Sender ID (defaults to 'lead').",
+        },
+        content: {
+          type: "string",
+          description: "Message content (for message/broadcast).",
+        },
+      },
+      required: ["action", "team_name"],
+    },
+  },
+};
+
+/**
  * Complete list of tool definitions in OpenAI function calling format.
  */
 export const TOOL_DEFINITIONS = [
@@ -618,4 +681,5 @@ export const TOOL_DEFINITIONS = [
   ContextSearchTool,
   SubAgentTool,
   SubAgentTeamTool,
+  AgentTeamsTool,
 ];

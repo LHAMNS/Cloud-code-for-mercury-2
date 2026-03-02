@@ -14,3 +14,5 @@ export { LspClient } from "./lsp.js";
 export { searchSymbols, fileOutline, extractSymbols } from "./ast-search.js";
 export { discoverAgents, resolveAgentTools, matchAgentForTask, formatAgentList, scaffoldAgent } from "./agent-definitions.js";
 export { loadProjectConfig, findProjectConfig, scaffoldProjectConfig } from "./project-config.js";
+export { labs, LAB_FEATURES } from "./labs.js";
+export { AgentTeam, executeAgentTeams, getTeam, listTeams } from "./agent-teams.js";

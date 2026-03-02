@@ -1,6 +1,8 @@
 // Mercury Code - System Prompt
 // Concise tool descriptions to minimize token usage while maximizing model understanding
 
+import { labs } from "./labs.js";
+
 // Cache for project config to avoid re-reading on every prompt build
 let _cachedProjectConfig = null;
 let _cachedProjectConfigCwd = null;
@@ -34,11 +36,7 @@ Filesystem tools (use absolute paths):
 - **ListDir**(path?, max_depth?, show_hidden?) — Tree-view directory listing.
 - **Diff**(file_a?, file_b?, git_ref?) — File diff or git changes.
 - **Fetch**(url, method?, headers?, body?) — HTTP request. 30s timeout.
-- **Lsp**(action, file_path?, line?, character?, query?) — Language server: definition, references, hover, symbols, workspace_symbols, diagnostics.
-- **AstSearch**(action, query?, kind?, language?, file_path?) — Structural code search: search (find symbols) or outline (file structure).
-- **ContextSearch**(query, scope?) — Search conversation log for past context. Expensive — last resort only.
-- **SubAgent**(task, agent_type?, resume?, run_in_background?, isolation?) — Spawn autonomous sub-agent. Types: explore, plan, general-purpose, or custom. Supports resume by agentId, background execution, and worktree isolation.
-- **SubAgentTeam**(tasks[{task, agent_type?}]) — Run up to 5 sub-agents in parallel.
+${_labsToolsSection()}
 
 ## Behavior
 
@@ -125,6 +123,55 @@ Tool execution runs with sandbox protections:
 - System directories blocked for writes: /etc, /usr, /bin, /sbin, etc.
 - Sub-agents: ${sandbox.sandboxSubAgents ? "also sandboxed" : "not sandboxed"}
 - Network access: allowed`;
+}
+
+/**
+ * Build the labs-gated tools section of the system prompt.
+ * Core tools (Read, Write, Edit, etc.) are always listed.
+ * Labs tools are only listed when their feature is active.
+ */
+function _labsToolsSection() {
+  const lines = [];
+
+  // LSP — gated by labs "lsp"
+  if (labs.isToolAllowed("Lsp")) {
+    lines.push('- **Lsp**(action, file_path?, line?, character?, query?) — Language server: definition, references, hover, symbols, workspace_symbols, diagnostics.');
+  }
+
+  // AST Search — gated by labs "ast-search"
+  if (labs.isToolAllowed("AstSearch")) {
+    lines.push('- **AstSearch**(action, query?, kind?, language?, file_path?) — Structural code search: search (find symbols) or outline (file structure).');
+  }
+
+  // Context Search — gated by labs "context-search"
+  if (labs.isToolAllowed("ContextSearch")) {
+    lines.push('- **ContextSearch**(query, scope?) — Search conversation log for past context. Expensive — last resort only.');
+  }
+
+  // SubAgent — gated by labs "subagent"
+  if (labs.isToolAllowed("SubAgent")) {
+    const extras = [];
+    if (labs.isActive("agent-resume")) extras.push("resume by agentId");
+    if (labs.isActive("agent-background")) extras.push("background execution");
+    if (labs.isActive("agent-worktree")) extras.push("worktree isolation");
+    const extraStr = extras.length > 0 ? ` Supports ${extras.join(", ")}.` : "";
+    lines.push(`- **SubAgent**(task, agent_type?${labs.isActive("agent-resume") ? ", resume?" : ""}${labs.isActive("agent-background") ? ", run_in_background?" : ""}${labs.isActive("agent-worktree") ? ", isolation?" : ""}) — Spawn autonomous sub-agent. Types: explore, plan, general-purpose, or custom.${extraStr}`);
+  }
+
+  // SubAgentTeam — gated by labs "subagent-team"
+  if (labs.isToolAllowed("SubAgentTeam")) {
+    lines.push('- **SubAgentTeam**(tasks[{task, agent_type?}]) — Run up to 5 sub-agents in parallel.');
+  }
+
+  // AgentTeams — gated by labs "agent-teams"
+  if (labs.isToolAllowed("AgentTeams")) {
+    lines.push('- **AgentTeams**(action, team_name, ...) — Collaborative agent teams: create teams, add tasks with dependencies, spawn teammates, message/broadcast, run all tasks, check status.');
+  }
+
+  if (lines.length > 0) {
+    return lines.join("\n");
+  }
+  return "";
 }
 
 function _trustSection(trustMode) {

@@ -161,10 +161,13 @@ export class MercuryClient {
    * Build the request body for Mercury-2.
    */
   _buildRequestBody(messages, options = {}) {
-    // Sanitize messages: ensure content is always a string (Mercury-2 rejects null content)
+    // Sanitize messages: ensure content is a string where required.
+    // Assistant messages with tool_calls legitimately have content: null per OpenAI spec.
     const sanitized = messages.map((msg) => {
       const m = { ...msg };
-      if (m.content === null || m.content === undefined) {
+      if (m.role === "assistant" && m.tool_calls) {
+        // Keep content as-is (null is valid for assistant + tool_calls)
+      } else if (m.content === null || m.content === undefined) {
         m.content = "";
       }
       return m;

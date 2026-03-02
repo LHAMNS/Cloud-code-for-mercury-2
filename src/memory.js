@@ -9,8 +9,13 @@ const MEMORY_FILE = "memory.md";
 const MAX_MEMORY_SIZE = 80000; // ~22K tokens max for memory file
 
 export class MemoryManager {
-  constructor(cwd) {
-    this.dir = path.join(cwd, MEMORY_DIR);
+  /**
+   * @param {string} cwd - Working directory
+   * @param {object} [opts]
+   * @param {string} [opts.dir] - Direct directory path (skips appending .mercury)
+   */
+  constructor(cwd, opts = {}) {
+    this.dir = opts.dir || path.join(cwd, MEMORY_DIR);
     this.filePath = path.join(this.dir, MEMORY_FILE);
   }
 
@@ -76,8 +81,13 @@ export class MemoryManager {
  * The model can Read this file to recover exact details from earlier turns.
  */
 export class ConversationLog {
-  constructor(cwd) {
-    this.dir = path.join(cwd, MEMORY_DIR);
+  /**
+   * @param {string} cwd - Working directory
+   * @param {object} [opts]
+   * @param {string} [opts.dir] - Direct directory path (skips appending .mercury)
+   */
+  constructor(cwd, opts = {}) {
+    this.dir = opts.dir || path.join(cwd, MEMORY_DIR);
     this.filePath = path.join(this.dir, "conversation.jsonl");
   }
 

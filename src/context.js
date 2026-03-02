@@ -63,7 +63,7 @@ async function _compact(messages, systemPrompt, client, memory, onInfo, threshol
   const sysTk = estimateTokens(systemPrompt) + 4;
   const usage = (sysTk + estimateMessagesTokens(messages)) / EFFECTIVE_INPUT;
 
-  if (usage < threshold) return;
+  if (usage < threshold) return false;
 
   // Find cutoff: everything before the last N turns gets compressed
   const cutoff = _findTurnCutoff(messages, keepTurns);
@@ -146,6 +146,7 @@ async function _compact(messages, systemPrompt, client, memory, onInfo, threshol
     `${(usage * 100).toFixed(0)}% → ${(newUsage * 100).toFixed(0)}%. ` +
     `Full log: .mercury/conversation.jsonl`
   );
+  return true;
 }
 
 // ── Summary prefix (from Codex CLI's summary_prefix.md) ───────────────────

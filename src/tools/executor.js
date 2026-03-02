@@ -6,7 +6,7 @@ import https from 'node:https';
 import path from 'node:path';
 import { SubAgent, runSubAgentTeam } from '../subagent.js';
 import { MercuryClient } from '../client.js';
-import { AgentPanelManager } from '../ui/display.js';
+import { AgentTabBar } from '../ui/agent-tabs.js';
 
 // ── Sanitized environment for child processes ────────────────────────────────
 // Strip keys that commonly hold secrets to prevent exfiltration via Bash
@@ -619,9 +619,12 @@ export class ToolExecutor {
           await this._grepDirectory(fullPath, regex, includeRegex, results, maxResults);
         }
       } else if (entry.isFile()) {
-        // Apply include filter against the file name
-        if (includeRegex && !includeRegex.test(entry.name)) {
-          continue;
+        // Apply include filter against both filename and relative path
+        if (includeRegex) {
+          const relPath = path.relative(dirPath, fullPath).replace(/\\/g, '/');
+          if (!includeRegex.test(entry.name) && !includeRegex.test(relPath)) {
+            continue;
+          }
         }
         await this._grepFile(fullPath, regex, results, maxResults);
       }
@@ -796,7 +799,7 @@ export class ToolExecutor {
    */
   async _diff(args) {
     const { file_a, file_b, git_ref } = args;
-    const execOpts = { encoding: 'utf-8', timeout: 30000, maxBuffer: 5 * 1024 * 1024 };
+    const execOpts = { encoding: 'utf-8', timeout: 30000, maxBuffer: 5 * 1024 * 1024, cwd: this.workspace };
 
     // Validate git ref if provided
     if (git_ref && !isValidGitRef(git_ref)) {
@@ -828,7 +831,7 @@ export class ToolExecutor {
     // Case 3: diff between two files
     if (file_a && file_b) {
       try {
-        const result = execFileSync('diff', ['-u', file_a, file_b], execOpts);
+        const result = execFileSync('diff', ['-u', '--', file_a, file_b], execOpts);
         return result || '(files are identical)';
       } catch (err) {
         if (err.stdout) return err.stdout;
@@ -888,10 +891,14 @@ export class ToolExecutor {
       };
 
       const req = lib.request(options, (res) => {
-        // Follow redirects automatically
+        // Follow redirects per RFC: 301/302/303 change to GET, 307/308 preserve method
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           const redirectUrl = new URL(res.headers.location, url).toString();
-          resolve(this._fetch({ ...args, url: redirectUrl }, _redirectCount + 1));
+          if (res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 303) {
+            resolve(this._fetch({ url: redirectUrl, method: 'GET', headers }, _redirectCount + 1));
+          } else {
+            resolve(this._fetch({ ...args, url: redirectUrl }, _redirectCount + 1));
+          }
           return;
         }
 
@@ -901,6 +908,8 @@ export class ToolExecutor {
           size += chunk.length;
           if (size <= MAX_BODY_SIZE) {
             data += chunk.toString();
+          } else {
+            res.destroy(); // Stop downloading oversized responses
           }
         });
         res.on('end', () => {
@@ -947,9 +956,12 @@ export class ToolExecutor {
       return 'Error: Sub-agents are disabled in read-only mode.';
     }
 
-    // Create panel manager for live display
-    const panels = new AgentPanelManager(tasks.length);
-    panels.init(tasks);
+    // Create interactive tab bar for live display
+    const tabBar = new AgentTabBar();
+    for (const task of tasks) {
+      tabBar.addAgent(task);
+    }
+    tabBar.start();
 
     let results;
     try {
@@ -959,15 +971,16 @@ export class ToolExecutor {
         trustMode: this.trustMode,
         onAgentProgress: (agentIndex, event, detail) => {
           if (event === 'done' || event === 'error') {
-            panels.finish(agentIndex, event === 'done', detail);
+            tabBar.finish(agentIndex, event === 'done', detail);
           } else {
-            panels.update(agentIndex, event, detail);
+            tabBar.update(agentIndex, event, detail);
           }
         },
       });
     } finally {
-      // Always clean up panels
-      panels.cleanup();
+      // Clean up tab bar and show final summary
+      tabBar.cleanup();
+      tabBar.printSummary();
     }
 
     // Format results

@@ -57,28 +57,36 @@ const MERCURY_LOGO = [
 /**
  * Print the welcome banner with gradient ASCII art.
  */
-export function printWelcome() {
+export async function printWelcome() {
   const w = getTermWidth();
   const sep = "─".repeat(Math.min(w - 4, 68));
 
   console.log("");
 
-  // Print logo with gradient coloring
+  // Animated logo reveal — staggered gradient
   for (let i = 0; i < MERCURY_LOGO.length; i++) {
     const color = BRAND[i % BRAND.length];
     console.log(`${color}${BOLD}${MERCURY_LOGO[i]}${RESET}`);
+    await _sleep(40); // Brief delay for visual effect
   }
 
   console.log("");
-  console.log(`${GRAY}  ${sep}${RESET}`);
+  console.log(`${fg256(30)}  ${sep}${RESET}`);
   console.log(
     `${BOLD}${fg256(87)}  Mercury Code${RESET} ${DIM}v${PKG_VERSION}${RESET}  ${GRAY}│${RESET}  ${DIM}Powered by Mercury-2 Diffusion Model${RESET}`
   );
   console.log(
     `${DIM}  Inception Labs${RESET}         ${GRAY}│${RESET}  ${DIM}Type /help for commands, /exit to quit${RESET}`
   );
-  console.log(`${GRAY}  ${sep}${RESET}`);
+  console.log(
+    `${DIM}  ${GRAY}Shortcuts:${RESET} ${DIM}ESC×3${RESET} ${GRAY}rollback${RESET}  ${DIM}↓${RESET} ${GRAY}agents${RESET}  ${DIM}Ctrl+C${RESET} ${GRAY}interrupt${RESET}`
+  );
+  console.log(`${fg256(30)}  ${sep}${RESET}`);
   console.log("");
+}
+
+function _sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
 }
 
 /**
@@ -125,7 +133,11 @@ export function printHelp() {
   console.log(`  ${GRAY}│${RESET}`);
   console.log(`${BOLD}${fg256(87)}  ╰──────────────────────────────────────────────────╯${RESET}`);
   console.log("");
-  console.log(`  ${DIM}Shortcuts: ${YELLOW}ESC\u00d73${RESET} ${DIM}rollback  ${YELLOW}Ctrl+C${RESET} ${DIM}interrupt${RESET}`);
+  console.log(`  ${DIM}Shortcuts:${RESET}`);
+  console.log(`    ${YELLOW}ESC×3${RESET}   ${DIM}Enter rollback mode${RESET}`);
+  console.log(`    ${YELLOW}↓${RESET}       ${DIM}Navigate agent tabs (during execution)${RESET}`);
+  console.log(`    ${YELLOW}Ctrl+C${RESET}  ${DIM}Interrupt current operation${RESET}`);
+  console.log(`    ${YELLOW}Tab${RESET}     ${DIM}Auto-complete slash commands${RESET}`);
   console.log("");
 }
 

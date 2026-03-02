@@ -137,9 +137,8 @@ export class MercuryRepl {
     this.conversation = new Conversation(buildSystemPrompt(this.workspace, this.trustMode));
     await this.conversation.loadMemory(this.memory);
 
-    printWelcome();
-    printInfo(`Workspace: ${this.workspace}`);
-    printInfo(`Trust: ${this._trustLabel(this.trustMode)}`);
+    await printWelcome();
+    this._printStatusBar();
     console.log("");
 
     // Enable keypress events for ESC detection
@@ -162,6 +161,7 @@ export class MercuryRepl {
       await this._gracefulExit();
     });
 
+    this._rl.setPrompt(this._buildPrompt());
     this._rl.prompt();
   }
 
@@ -232,6 +232,45 @@ export class MercuryRepl {
     }
   }
 
+  /**
+   * Print a compact status bar showing workspace, trust, and context usage.
+   */
+  _printStatusBar() {
+    const E = "\x1b[", R = `${E}0m`, B = `${E}1m`, D = `${E}2m`;
+    const C = `${E}38;5;87m`, G = `${E}90m`, GR = `${E}32m`, Y = `${E}33m`;
+    const w = (process.stdout.columns || 80) - 4;
+    const sep = "─".repeat(Math.min(w, 68));
+
+    const wsName = path.basename(this.workspace);
+    const trustIcon = this.trustMode === TRUST_READONLY ? "🔒" : this.trustMode === TRUST_OPEN ? "🔓" : "🔐";
+    const ctxPct = this.conversation
+      ? ((this.conversation.getTokenEstimate() / MODEL_LIMITS.max_context_tokens) * 100).toFixed(0)
+      : "0";
+
+    console.log(`${G}  ${sep}${R}`);
+    console.log(
+      `  ${C}${B}${wsName}${R} ${G}│${R} ${trustIcon} ${D}${this._trustLabel(this.trustMode)}${R} ${G}│${R} ` +
+      `${D}Context:${R} ${parseInt(ctxPct) > 75 ? Y : GR}${ctxPct}%${R}`
+    );
+    console.log(`${G}  ${sep}${R}`);
+  }
+
+  /**
+   * Build a context-aware prompt string showing workspace + usage %.
+   */
+  _buildPrompt() {
+    const E = "\x1b[", R = `${E}0m`, B = `${E}1m`, D = `${E}2m`;
+    const C = `${E}38;5;87m`, G = `${E}90m`, Y = `${E}33m`, GR = `${E}32m`;
+
+    const wsName = path.basename(this.workspace);
+    const ctxPct = this.conversation
+      ? Math.round((this.conversation.getTokenEstimate() / MODEL_LIMITS.max_context_tokens) * 100)
+      : 0;
+    const ctxColor = ctxPct > 75 ? Y : GR;
+
+    return `${G}${wsName}${R} ${ctxColor}${ctxPct}%${R} ${C}${B}>${R} `;
+  }
+
   // ── ESC detection ─────────────────────────────────────────────────────────
 
   _setupKeyListener() {
@@ -275,13 +314,15 @@ export class MercuryRepl {
   async _handleInput(input) {
     const trimmed = input.trim();
     if (!trimmed) {
-      this._rl.prompt();
+      this._rl.setPrompt(this._buildPrompt());
+    this._rl.prompt();
       return;
     }
 
     if (trimmed.startsWith("/")) {
       await this._handleCommand(trimmed);
-      this._rl.prompt();
+      this._rl.setPrompt(this._buildPrompt());
+    this._rl.prompt();
       return;
     }
 
@@ -298,14 +339,21 @@ export class MercuryRepl {
       if (this.verbose) console.error(err.stack);
     }
 
+    this._rl.setPrompt(this._buildPrompt());
     this._rl.prompt();
   }
 
   // ── Permission check ─────────────────────────────────────────────────────
 
   _checkPermission(rawToolName, args) {
-    // Normalize tool name to PascalCase for consistent matching
-    const toolName = rawToolName.charAt(0).toUpperCase() + rawToolName.slice(1);
+    // Normalize tool name using canonical lookup map (handles multi-word names like SubAgentTeam)
+    const CANONICAL_NAMES = {
+      read: "Read", write: "Write", edit: "Edit", patch: "Patch",
+      bash: "Bash", glob: "Glob", grep: "Grep", listdir: "ListDir",
+      diff: "Diff", fetch: "Fetch", contextsearch: "ContextSearch",
+      subagent: "SubAgent", subagentteam: "SubAgentTeam",
+    };
+    const toolName = CANONICAL_NAMES[rawToolName.toLowerCase()] || rawToolName;
 
     // Fetch: special handling — restrict by trust mode
     if (toolName === "Fetch") {
@@ -393,14 +441,30 @@ export class MercuryRepl {
   }
 
   async _requestApproval(toolName, args, reason) {
+    const E = "\x1b[", R = `${E}0m`, B = `${E}1m`, D = `${E}2m`;
+    const Y = `${E}33m`, G = `${E}90m`, GR = `${E}32m`, RD = `${E}31m`;
+    const C = `${E}38;5;87m`;
+
     const detail = reason || `${toolName} requires approval`;
-    console.log(`\x1b[33m  ? ${detail}\x1b[0m`);
+
+    console.log("");
+    console.log(`${Y}${B}  ╭─ Approval Required ──────────────────────────────────╮${R}`);
+    console.log(`${G}  │${R}`);
+    console.log(`${G}  │${R}  ${Y}⚠${R}  ${B}${detail}${R}`);
 
     if (toolName === "Bash" && args.command) {
-      console.log(`\x1b[90m    $ ${args.command.length > 100 ? args.command.slice(0, 100) + "..." : args.command}\x1b[0m`);
+      const cmd = args.command.length > 60 ? args.command.slice(0, 57) + "..." : args.command;
+      console.log(`${G}  │${R}  ${D}$ ${cmd}${R}`);
+    } else if ((toolName === "Write" || toolName === "Edit") && args.file_path) {
+      console.log(`${G}  │${R}  ${D}→ ${args.file_path}${R}`);
     }
 
-    const answer = await this._ask("\x1b[33m  Allow? (y/n) \x1b[0m");
+    console.log(`${G}  │${R}`);
+    console.log(`${G}  │${R}    ${GR}y${R}${D} = allow    ${RD}n${R}${D} = deny${R}`);
+    console.log(`${G}  │${R}`);
+    console.log(`${Y}${B}  ╰───────────────────────────────────────────────────────╯${R}`);
+
+    const answer = await this._ask(`  ${Y}${B}Allow? ${R}${D}(y/n)${R} `);
     return answer.trim().toLowerCase().startsWith("y");
   }
 
@@ -631,19 +695,24 @@ export class MercuryRepl {
       };
 
       const executeRollback = (option) => {
-        const cpIndex = checkpoints[selectedIdx].index;
-        if (option === 0) {
-          const result = this.rollback.fullRollback(cpIndex);
-          if (result.restored) {
-            this.conversation.messages = result.messages;
-            printSuccess(`Full rollback to checkpoint ${cpIndex + 1}.`);
-          } else printError("Rollback failed.");
-        } else if (option === 1) {
-          const result = this.rollback.contextRollback(cpIndex);
-          if (result.restored) {
-            this.conversation.messages = result.messages;
-            printSuccess(`Context restored to checkpoint ${cpIndex + 1}.`);
-          } else printError("Context restore failed.");
+        try {
+          const cpIndex = checkpoints[selectedIdx].index;
+          if (option === 0) {
+            const result = this.rollback.fullRollback(cpIndex);
+            if (result.restored) {
+              this.conversation.messages = result.messages;
+              printSuccess(`Full rollback to checkpoint ${cpIndex + 1}.`);
+            } else printError("Rollback failed.");
+          } else if (option === 1) {
+            const result = this.rollback.contextRollback(cpIndex);
+            if (result.restored) {
+              this.conversation.messages = result.messages;
+              printSuccess(`Context restored to checkpoint ${cpIndex + 1}.`);
+            } else printError("Context restore failed.");
+          }
+          // option === 2 is Cancel — do nothing
+        } catch (err) {
+          printError(`Rollback error: ${err.message}`);
         }
       };
 
@@ -652,7 +721,8 @@ export class MercuryRepl {
         this._inRollbackMode = false;
         process.stdout.write("\x1b[2J\x1b[H");
         printInfo("Exited rollback mode.");
-        this._rl.prompt();
+        this._rl.setPrompt(this._buildPrompt());
+    this._rl.prompt();
         resolve();
       };
 
@@ -674,6 +744,7 @@ export class MercuryRepl {
       case "/clear":
         this.conversation.clear();
         await this.log.clear();
+        this.rollback.checkpoints = [];
         printInfo("Conversation cleared.");
         break;
 
@@ -755,10 +826,7 @@ export class MercuryRepl {
         break;
 
       case "/context":
-        printInfo(`Context: ${this.conversation.getUsagePercent()}`);
-        printInfo(`Messages: ${this.conversation.messages.length}`);
-        printInfo(`Checkpoints: ${this.rollback.count}`);
-        printInfo(`Session: ${this._sessionId}`);
+        this._printContextInfo();
         break;
 
       case "/settings":
@@ -859,8 +927,14 @@ export class MercuryRepl {
       }
       case "stream": this.client.config.stream = value === "true" || value === "on"; break;
       case "diffusing": this.client.config.diffusing = value === "true" || value === "on"; break;
-      case "api_base": this.client.baseURL = value; break;
-      case "api_key": this.client.apiKey = value; break;
+      case "api_base":
+        this.client.baseURL = value;
+        this.toolExecutor._clientOptions.baseURL = value;
+        break;
+      case "api_key":
+        this.client.apiKey = value;
+        this.toolExecutor._clientOptions.apiKey = value;
+        break;
       case "supercompress": this.superCompress = value === "true" || value === "on"; break;
       case "contextsearch": this.contextSearchEnabled = value === "true" || value === "on"; break;
       default:
@@ -868,6 +942,38 @@ export class MercuryRepl {
         return;
     }
     printSuccess(`${subCmd} updated.`);
+  }
+
+  // ── Context info ─────────────────────────────────────────────────────────
+
+  _printContextInfo() {
+    const E = "\x1b[", R = `${E}0m`, B = `${E}1m`, D = `${E}2m`;
+    const C = `${E}38;5;87m`, G = `${E}90m`, GR = `${E}32m`, Y = `${E}33m`, RD = `${E}31m`;
+
+    const used = this.conversation.getTokenEstimate();
+    const max = MODEL_LIMITS.max_context_tokens;
+    const pct = Math.round((used / max) * 100);
+    const barWidth = 30;
+    const filled = Math.round((pct / 100) * barWidth);
+    const empty = barWidth - filled;
+    const barColor = pct > 90 ? RD : pct > 75 ? Y : GR;
+
+    console.log("");
+    console.log(`${B}${C}  ╭─ Context Usage ─────────────────────────────────────╮${R}`);
+    console.log(`${G}  │${R}`);
+
+    // Visual progress bar
+    const bar = `${barColor}${"█".repeat(filled)}${G}${"░".repeat(empty)}${R}`;
+    console.log(`${G}  │${R}  ${bar} ${barColor}${B}${pct}%${R}`);
+    console.log(`${G}  │${R}  ${D}${used.toLocaleString()} / ${max.toLocaleString()} tokens${R}`);
+    console.log(`${G}  │${R}`);
+    console.log(`${G}  │${R}  ${GR}Messages${R}     ${D}${this.conversation.messages.length}${R}`);
+    console.log(`${G}  │${R}  ${GR}Checkpoints${R}  ${D}${this.rollback.count}${R}`);
+    console.log(`${G}  │${R}  ${GR}Session${R}      ${D}${this._sessionId}${R}`);
+    console.log(`${G}  │${R}  ${GR}Compression${R}  ${D}${this.superCompress ? "Super (50%)" : "Normal (80%)"}${R}`);
+    console.log(`${G}  │${R}`);
+    console.log(`${B}${C}  ╰──────────────────────────────────────────────────────╯${R}`);
+    console.log("");
   }
 
   // ── Graceful exit ─────────────────────────────────────────────────────────

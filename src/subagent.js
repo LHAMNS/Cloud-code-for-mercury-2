@@ -7,8 +7,11 @@ import { MercuryClient } from "./client.js";
 import { TOOL_DEFINITIONS } from "./tools/definitions.js";
 import { ToolExecutor } from "./tools/executor.js";
 import { buildSystemPrompt } from "./system-prompt.js";
-import { estimateTokens, estimateMessagesTokens, compressContext } from "./context.js";
+import { compressContext } from "./context.js";
 import { MODEL_LIMITS } from "./config.js";
+import { MemoryManager, ConversationLog } from "./memory.js";
+import { RollbackManager } from "./rollback.js";
+import path from "node:path";
 
 // Maximum tool turns per sub-agent (more conservative than main agent)
 const MAX_SUB_TURNS = 30;
@@ -58,6 +61,7 @@ export class SubAgent {
     this.task = options.task || "";
     this.workspace = options.workspace || process.cwd();
     this.trustMode = options.trustMode || "approval";
+    this.agentId = options.agentId || `agent-${Date.now().toString(36)}`;
     this.client = new MercuryClient({
       apiKey: options.apiKey,
       baseURL: options.baseURL,
@@ -72,6 +76,13 @@ export class SubAgent {
     this.messages = [];
     this._turnCount = 0;
     this._onProgress = options.onProgress || null;
+
+    // Per-agent persistence: conversation log, memory, rollback
+    // Use direct dir option to avoid double .mercury nesting
+    const agentDir = path.join(this.workspace, ".mercury", "agents", this.agentId);
+    this.log = new ConversationLog(null, { dir: agentDir });
+    this.memory = new MemoryManager(null, { dir: agentDir });
+    this.rollback = new RollbackManager(this.workspace);
   }
 
   /**
@@ -113,21 +124,28 @@ export class SubAgent {
       { role: "user", content: this.task },
     ];
 
+    // Log initial task and create rollback checkpoint
+    await this.log.append({ role: "user", content: this.task });
+    this.rollback.createCheckpoint(this.task.slice(0, 80), this.messages);
+
     this._emit("thinking", "Starting...");
 
     while (this._turnCount < MAX_SUB_TURNS) {
       this._turnCount++;
 
-      // Codex-style context compression
+      // Codex-style context compression with per-agent memory
       try {
-        const compressed = await compressContext(
+        const msgCountBefore = this.messages.length;
+        await compressContext(
           this.messages,
           this._systemPrompt,
           this.client,
-          null,
-          () => {},
+          this.memory,
+          (msg) => this._emit("compressing", msg),
         );
-        if (compressed) this._emit("compressing", "Context compressed");
+        if (this.messages.length < msgCountBefore) {
+          this._emit("compressing", "Context compressed");
+        }
       } catch {
         // Non-critical
       }
@@ -163,6 +181,15 @@ export class SubAgent {
           role: "assistant",
           content: message.content || null,
           tool_calls: message.tool_calls,
+        });
+        // Log assistant message with tool calls
+        await this.log.append({
+          role: "assistant",
+          content: message.content,
+          tool_calls: message.tool_calls.map((tc) => ({
+            name: tc.function.name,
+            arguments: tc.function.arguments,
+          })),
         });
 
         for (const tc of message.tool_calls) {
@@ -207,6 +234,9 @@ export class SubAgent {
 
           this._emit("tool_result", `${fnName} done`);
 
+          // Log tool result
+          await this.log.append({ role: "tool", name: fnName, result: String(result) });
+
           // Wrap result in content fence to mitigate prompt injection
           this.messages.push({
             role: "tool",
@@ -218,7 +248,8 @@ export class SubAgent {
         continue;
       }
 
-      // Final response
+      // Final response — log it
+      await this.log.append({ role: "assistant", content: message.content });
       this._emit("done", message.content || "");
       return message.content || "(sub-agent returned empty response)";
     }

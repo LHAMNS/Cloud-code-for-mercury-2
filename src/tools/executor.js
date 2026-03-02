@@ -8,6 +8,23 @@ import { SubAgent, runSubAgentTeam } from '../subagent.js';
 import { MercuryClient } from '../client.js';
 import { AgentPanelManager } from '../ui/display.js';
 
+// ── Sanitized environment for child processes ────────────────────────────────
+// Strip keys that commonly hold secrets to prevent exfiltration via Bash
+const SENSITIVE_ENV_PATTERNS = [
+  /KEY/i, /SECRET/i, /TOKEN/i, /PASSWORD/i, /CREDENTIAL/i, /AUTH/i,
+  /^AWS_/, /^GCP_/, /^AZURE_/, /^GITHUB_TOKEN$/, /^NPM_TOKEN$/,
+];
+
+function _sanitizedEnv() {
+  const clean = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (SENSITIVE_ENV_PATTERNS.some(re => re.test(key))) continue;
+    clean[key] = value;
+  }
+  // Keep PATH, HOME, USER, SHELL, LANG, TERM, EDITOR for normal operation
+  return clean;
+}
+
 // ── Read tool token limit ────────────────────────────────────────────────────
 // ~35,000 tokens at ~3.5 chars/token = 122,500 chars
 const READ_MAX_CHARS = 122500;
@@ -417,7 +434,7 @@ export class ToolExecutor {
         stdio: ['pipe', 'pipe', 'pipe'],
         shell: true,
         cwd: this.workspace, // Enforce workspace as working directory
-        env: process.env,
+        env: _sanitizedEnv(), // Strip sensitive env vars
       });
       return result || '(command completed with no output)';
     } catch (err) {
@@ -454,7 +471,7 @@ export class ToolExecutor {
       return 'Error: pattern is required.';
     }
 
-    const searchDir = basePath || process.cwd();
+    const searchDir = basePath || this.workspace;
 
     try {
       await stat(searchDir);
@@ -499,7 +516,7 @@ export class ToolExecutor {
       return `Error: Invalid regex pattern "${pattern}": ${err.message}`;
     }
 
-    const targetPath = searchPath || process.cwd();
+    const targetPath = searchPath || this.workspace;
     const results = [];
     const MAX_RESULTS = 1000;
 
@@ -699,7 +716,7 @@ export class ToolExecutor {
    * List directory contents with tree-like format.
    */
   async _listDir(args) {
-    const dirPath = args.path || process.cwd();
+    const dirPath = args.path || this.workspace;
     const maxDepth = Math.min(args.max_depth || 1, 5);
     const showHidden = args.show_hidden || false;
 
@@ -980,7 +997,7 @@ export class ToolExecutor {
     if (!query) return 'Error: query is required.';
 
     // Locate the conversation log
-    const logPath = path.join(process.cwd(), '.mercury', 'conversation.jsonl');
+    const logPath = path.join(this.workspace, '.mercury', 'conversation.jsonl');
     let logContent;
     try {
       logContent = await readFile(logPath, 'utf-8');

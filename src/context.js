@@ -73,7 +73,7 @@ async function _compact(messages, systemPrompt, client, memory, onInfo, threshol
   const oldTokens = estimateMessagesTokens(oldMessages);
 
   onInfo(
-    `上下文 ${(usage * 100).toFixed(0)}% — 压缩 ${oldMessages.length} 条旧消息 (~${oldTokens} tokens)…`
+    `Context ${(usage * 100).toFixed(0)}% — compressing ${oldMessages.length} old messages (~${oldTokens} tokens)...`
   );
 
   // Build recap for model to summarize
@@ -82,25 +82,35 @@ async function _compact(messages, systemPrompt, client, memory, onInfo, threshol
   let summary = null;
   let memoryEntry = null;
 
-  // Ask Mercury-2 to generate handoff summary (same as Codex)
+  // Ask Mercury-2 to generate handoff summary with retry logic
   if (client) {
-    try {
-      const response = await client.chatCompletion(
-        [
-          { role: "system", content: COMPACT_PROMPT },
-          { role: "user", content: recap },
-        ],
-        { max_tokens: 2500, temperature: 0.3, reasoning_effort: "low" }
-      );
+    const MAX_RETRIES = 2;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const response = await client.chatCompletion(
+          [
+            { role: "system", content: COMPACT_PROMPT },
+            { role: "user", content: recap },
+          ],
+          { max_tokens: 2500, temperature: 0.3, reasoning_effort: "low" }
+        );
 
-      const raw = response.choices?.[0]?.message?.content;
-      if (raw) {
-        const parts = _parseSections(raw);
-        summary = parts.summary;
-        memoryEntry = parts.memory;
+        const raw = response.choices?.[0]?.message?.content;
+        if (raw) {
+          const parts = _parseSections(raw);
+          summary = parts.summary;
+          memoryEntry = parts.memory;
+        }
+        break; // Success — exit retry loop
+      } catch (err) {
+        if (attempt < MAX_RETRIES) {
+          const delay = Math.pow(2, attempt + 1) * 1000; // 2s, 4s
+          onInfo(`Compression API failed (${err.message}), retrying in ${delay / 1000}s...`);
+          await new Promise(r => setTimeout(r, delay));
+        } else {
+          onInfo(`Compression API failed after ${MAX_RETRIES + 1} attempts, using fallback summary`);
+        }
       }
-    } catch (err) {
-      onInfo(`压缩 API 失败 (${err.message})，使用机械摘要`);
     }
   }
 
@@ -132,9 +142,9 @@ async function _compact(messages, systemPrompt, client, memory, onInfo, threshol
 
   const newUsage = (sysTk + estimateMessagesTokens(messages)) / EFFECTIVE_INPUT;
   onInfo(
-    `压缩完成: ${oldMessages.length} 条消息 → ${replacement.length} 条。` +
-    `${(usage * 100).toFixed(0)}% → ${(newUsage * 100).toFixed(0)}%。` +
-    `完整日志: .mercury/conversation.jsonl`
+    `Compressed: ${oldMessages.length} messages → ${replacement.length}. ` +
+    `${(usage * 100).toFixed(0)}% → ${(newUsage * 100).toFixed(0)}%. ` +
+    `Full log: .mercury/conversation.jsonl`
   );
 }
 

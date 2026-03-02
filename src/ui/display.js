@@ -88,29 +88,44 @@ export function printHelp() {
   console.log("");
   console.log(`${BOLD}${fg256(87)}  ╭─ Commands ─────────────────────────────────────────╮${RESET}`);
 
-  const cmds = [
-    ["/help", "Show this help"],
-    ["/clear", "Clear conversation"],
-    ["/trust <mode>", "Set trust: readonly | approval | open | outside"],
-    ["/workspace <path>", "View/change workspace directory"],
-    ["/reasoning <level>", "Set reasoning: instant | low | medium | high"],
-    ["/supercompress", "Toggle super compression (on/off)"],
-    ["/contextsearch", "Toggle context search tool (off by default)"],
-    ["/history [save|restore]", "Session history management"],
-    ["/context", "View context usage stats"],
-    ["/settings [key value]", "View/modify settings (API key, model, etc.)"],
-    ["/config", "Show raw config (read-only)"],
-    ["/exit", "Exit Mercury Code"],
+  const categories = [
+    ["General", [
+      ["/help", "Show this help"],
+      ["/clear", "Clear conversation"],
+      ["/exit", "Exit Mercury Code"],
+    ]],
+    ["Security & Workspace", [
+      ["/trust <mode>", "readonly | approval | open | outside"],
+      ["/workspace <path>", "View/change workspace directory"],
+    ]],
+    ["Model Settings", [
+      ["/reasoning <level>", "instant | low | medium | high"],
+      ["/settings [key val]", "View/modify any setting"],
+      ["/config", "Show raw config (read-only)"],
+    ]],
+    ["Features", [
+      ["/supercompress", "Toggle aggressive compression"],
+      ["/contextsearch", "Toggle context search tool"],
+    ]],
+    ["Session", [
+      ["/history [cmd]", "save | restore | list"],
+      ["/context", "View context usage & stats"],
+    ]],
   ];
 
-  for (const [cmd, desc] of cmds) {
-    const cmdPadded = cmd.padEnd(24);
-    console.log(`  ${GRAY}│${RESET} ${GREEN}${cmdPadded}${RESET} ${DIM}${desc}${RESET}`);
+  for (const [category, cmds] of categories) {
+    console.log(`  ${GRAY}│${RESET}`);
+    console.log(`  ${GRAY}│${RESET} ${BOLD}${fg256(87)}${category}${RESET}`);
+    for (const [cmd, desc] of cmds) {
+      const cmdPadded = cmd.padEnd(22);
+      console.log(`  ${GRAY}│${RESET}   ${GREEN}${cmdPadded}${RESET} ${DIM}${desc}${RESET}`);
+    }
   }
 
+  console.log(`  ${GRAY}│${RESET}`);
   console.log(`${BOLD}${fg256(87)}  ╰──────────────────────────────────────────────────╯${RESET}`);
   console.log("");
-  console.log(`  ${DIM}Shortcuts: ${YELLOW}ESC\u00d73${RESET} ${DIM}rollback mode  ${YELLOW}Ctrl+C${RESET} ${DIM}interrupt${RESET}`);
+  console.log(`  ${DIM}Shortcuts: ${YELLOW}ESC\u00d73${RESET} ${DIM}rollback  ${YELLOW}Ctrl+C${RESET} ${DIM}interrupt${RESET}`);
   console.log("");
 }
 
@@ -205,7 +220,7 @@ function _formatToolArgs(name, args) {
 /**
  * Print tool result with truncation and Codex-style indentation.
  */
-export function printToolResult(result, truncateAt = 600) {
+export function printToolResult(result, elapsedMs, truncateAt = 600) {
   let output = String(result);
   if (output.length > truncateAt) {
     output =
@@ -216,6 +231,17 @@ export function printToolResult(result, truncateAt = 600) {
   for (const line of lines) {
     console.log(`${fg256(75)}  │${RESET}  ${GRAY}${line}${RESET}`);
   }
+  if (elapsedMs !== undefined) {
+    const sec = (elapsedMs / 1000).toFixed(1);
+    console.log(`${fg256(75)}  │${RESET}  ${GRAY}(${sec}s)${RESET}`);
+  }
+}
+
+/**
+ * Print a warning message with yellow styling.
+ */
+export function printWarning(message) {
+  console.log(`${YELLOW}  ⚠ ${message}${RESET}`);
 }
 
 /**
@@ -293,12 +319,12 @@ export function printRollbackUI(checkpoints, selectedIndex) {
   process.stdout.write(`${ESC}2J${ESC}H`);
 
   console.log("");
-  console.log(`${BOLD}${fg256(214)}  ╭─ 撤回模式 (Rollback) ──────────────────────────────╮${RESET}`);
-  console.log(`${GRAY}  │ 使用 ↑↓ 选择时间点，Enter 确认，ESC 取消           │${RESET}`);
+  console.log(`${BOLD}${fg256(214)}  ╭─ Rollback Mode ────────────────────────────────────╮${RESET}`);
+  console.log(`${GRAY}  │ Use ↑↓ to select checkpoint, Enter to confirm, ESC │${RESET}`);
   console.log(`${fg256(214)}  ├───────────────────────────────────────────────────────┤${RESET}`);
 
   if (checkpoints.length === 0) {
-    console.log(`${GRAY}  │   (没有可用的检查点)                                  │${RESET}`);
+    console.log(`${GRAY}  │   (No checkpoints available)                         │${RESET}`);
   } else {
     for (let i = 0; i < checkpoints.length; i++) {
       const cp = checkpoints[i];
@@ -325,14 +351,14 @@ export function printRollbackConfirm(checkpoint, selectedOption) {
   process.stdout.write(`${ESC}2J${ESC}H`);
 
   console.log("");
-  console.log(`${BOLD}${fg256(214)}  ╭─ 确认撤回 ──────────────────────────────────────────╮${RESET}`);
-  console.log(`${GRAY}  │ 目标: "${checkpoint.userMessage.slice(0, 40)}..."${RESET}`);
+  console.log(`${BOLD}${fg256(214)}  ╭─ Confirm Rollback ─────────────────────────────────╮${RESET}`);
+  console.log(`${GRAY}  │ Target: "${checkpoint.userMessage.slice(0, 40)}..."${RESET}`);
   console.log(`${fg256(214)}  ├───────────────────────────────────────────────────────┤${RESET}`);
 
   const options = [
-    ["完整回滚", "恢复所有文件更改 + 对话上下文到该时间点"],
-    ["仅恢复上下文", "保留文件不变，只回滚对话上下文和模型状态"],
-    ["取消", "返回，不做任何操作"],
+    ["Full Rollback", "Restore all file changes + conversation to this checkpoint"],
+    ["Context Only", "Keep files unchanged, only rollback conversation state"],
+    ["Cancel", "Go back, do nothing"],
   ];
 
   for (let i = 0; i < options.length; i++) {
@@ -352,12 +378,12 @@ export function printRollbackConfirm(checkpoint, selectedOption) {
  */
 export function printSessionList(sessions) {
   if (sessions.length === 0) {
-    printInfo("没有保存的会话记录。使用 /history save 保存当前会话。");
+    printInfo("No saved sessions. Use /history save to save current session.");
     return;
   }
 
   console.log("");
-  console.log(`${BOLD}${fg256(87)}  ╭─ 历史会话 ──────────────────────────────────────────╮${RESET}`);
+  console.log(`${BOLD}${fg256(87)}  ╭─ Session History ──────────────────────────────────╮${RESET}`);
 
   for (let i = 0; i < Math.min(sessions.length, 20); i++) {
     const s = sessions[i];
@@ -375,7 +401,7 @@ export function printSessionList(sessions) {
 
   console.log(`${BOLD}${fg256(87)}  ╰──────────────────────────────────────────────────────╯${RESET}`);
   console.log("");
-  console.log(`  ${DIM}使用 /history restore <编号> 恢复会话${RESET}`);
+  console.log(`  ${DIM}Use /history restore <number> to restore a session${RESET}`);
   console.log("");
 }
 

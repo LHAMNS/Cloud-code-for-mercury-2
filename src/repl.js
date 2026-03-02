@@ -15,6 +15,7 @@ import { ToolExecutor } from "./tools/executor.js";
 import { MemoryManager, ConversationLog } from "./memory.js";
 import { SessionHistory } from "./history.js";
 import { RollbackManager } from "./rollback.js";
+import { Sandbox, SANDBOX_OFF, SANDBOX_ON, SANDBOX_STRICT, SANDBOX_MODES } from "./sandbox.js";
 import {
   printWelcome,
   printHelp,
@@ -81,12 +82,22 @@ export class MercuryRepl {
     this.trustMode = options.trustMode || TRUST_APPROVAL;
     this.allowOutsideWorkspace = false;
 
-    // ToolExecutor receives workspace + trustMode for enforcement
+    // Sandbox: default ON for main agent and all sub-agents
+    this.sandbox = new Sandbox({
+      mode: options.sandboxMode || SANDBOX_ON,
+      workspace: this.workspace,
+      sandboxSubAgents: options.sandboxSubAgents !== false,
+      allowNetwork: options.sandboxAllowNetwork !== false,
+    });
+    this.sandbox.init();
+
+    // ToolExecutor receives workspace + trustMode + sandbox for enforcement
     this.toolExecutor = new ToolExecutor({
       apiKey: options.apiKey,
       baseURL: options.baseURL,
       workspace: this.workspace,
       trustMode: this.trustMode,
+      sandbox: this.sandbox,
     });
 
     // These will be initialized after workspace is chosen
@@ -113,8 +124,8 @@ export class MercuryRepl {
   async start() {
     const SLASH_CMDS = [
       "/help", "/clear", "/trust", "/workspace", "/reasoning",
-      "/supercompress", "/contextsearch", "/history", "/context",
-      "/settings", "/config", "/exit",
+      "/supercompress", "/contextsearch", "/sandbox", "/history",
+      "/context", "/settings", "/config", "/exit",
     ];
 
     this._rl = readline.createInterface({
@@ -135,7 +146,7 @@ export class MercuryRepl {
     this.memory = new MemoryManager(this.workspace);
     this.log = new ConversationLog(this.workspace);
     this.rollback = new RollbackManager(this.workspace);
-    this.conversation = new Conversation(buildSystemPrompt(this.workspace, this.trustMode));
+    this.conversation = new Conversation(buildSystemPrompt(this.workspace, this.trustMode, this.sandbox));
     await this.conversation.loadMemory(this.memory);
 
     await printWelcome();
@@ -215,6 +226,35 @@ export class MercuryRepl {
     // Update toolExecutor trust mode
     this.toolExecutor.trustMode = this.trustMode;
 
+    // ── Step 3: Sandbox ─────────────────────────────────────────────────
+    const sandboxStatus = this.sandbox.getStatus();
+
+    console.log("");
+    console.log(`${B}${C}  ╭─ Setup ──────────────────────────────────────────────╮${R}`);
+    console.log(`${G}  │${R}`);
+    console.log(`${G}  │${R}  ${B}${C}Step 3/3${R}  ${D}Sandbox Isolation${R}`);
+    console.log(`${G}  │${R}`);
+    console.log(`${G}  │${R}  ${D}Detected backend:${R} ${C}${sandboxStatus.backend}${R}`);
+    console.log(`${G}  │${R}`);
+    console.log(`${G}  │${R}  ${B}${GR}▸ 1${R}  ${D}On${R}          ${G}Workspace-scoped filesystem, resource limits (default)${R}`);
+    console.log(`${G}  │${R}    ${Y}2${R}  ${D}Strict${R}      ${G}Read-only root, no network for Bash, domain allowlist${R}`);
+    console.log(`${G}  │${R}    ${Y}3${R}  ${D}Off${R}         ${G}No sandboxing (not recommended)${R}`);
+    console.log(`${G}  │${R}`);
+    console.log(`${G}  │${R}  ${D}Applies to: main agent + all sub-agents${R}`);
+    console.log(`${G}  │${R}  ${D}Tip: Change later with /sandbox${R}`);
+    console.log(`${G}  │${R}`);
+    console.log(`${B}${C}  ╰──────────────────────────────────────────────────────╯${R}`);
+
+    const sandboxStr = await this._ask(`  ${C}Select [1]:${R} `);
+    const sandboxNum = parseInt(sandboxStr.trim(), 10);
+    if (sandboxNum === 2) this.sandbox.mode = SANDBOX_STRICT;
+    else if (sandboxNum === 3) this.sandbox.mode = SANDBOX_OFF;
+    else this.sandbox.mode = SANDBOX_ON;
+
+    // Update sandbox workspace after selection
+    this.sandbox.workspace = this.workspace;
+    this.toolExecutor.sandbox = this.sandbox;
+
     console.log("");
   }
 
@@ -246,10 +286,12 @@ export class MercuryRepl {
     const trustIcon = this.trustMode === TRUST_READONLY ? "🔒" : this.trustMode === TRUST_OPEN ? "🔓" : "🔐";
     const usedTokens = this.conversation ? this.conversation.getTokenEstimate() : 0;
     const gauge = renderContextGauge(usedTokens, MODEL_LIMITS.max_context_tokens);
+    const sandboxStatus = this.sandbox.getStatus();
+    const sandboxLabel = sandboxStatus.icon + " " + sandboxStatus.label;
 
     console.log(`${G}  ${sep}${R}`);
     console.log(
-      `  ${C}${B}${wsName}${R} ${G}│${R} ${trustIcon} ${D}${this._trustLabel(this.trustMode)}${R} ${G}│${R} ${gauge}`
+      `  ${C}${B}${wsName}${R} ${G}│${R} ${trustIcon} ${D}${this._trustLabel(this.trustMode)}${R} ${G}│${R} ${sandboxLabel} ${G}│${R} ${gauge}`
     );
     console.log(`${G}  ${sep}${R}`);
   }
@@ -291,7 +333,9 @@ export class MercuryRepl {
     this.memory = new MemoryManager(this.workspace);
     this.log = new ConversationLog(this.workspace);
     this.rollback = new RollbackManager(this.workspace);
-    this.conversation = new Conversation(buildSystemPrompt(this.workspace, this.trustMode));
+    this.conversation = new Conversation(
+      buildSystemPrompt(this.workspace, this.trustMode, this.sandbox)
+    );
     await this.conversation.loadMemory(this.memory);
     this.conversation.addUserMessage(promptText);
     await this.log.append({ role: "user", content: promptText });
@@ -800,7 +844,7 @@ export class MercuryRepl {
         }
         // Update ToolExecutor and rebuild system prompt
         this.toolExecutor.trustMode = this.trustMode;
-        this.conversation.updateSystemPrompt(buildSystemPrompt(this.workspace, this.trustMode));
+        this.conversation.updateSystemPrompt(buildSystemPrompt(this.workspace, this.trustMode, this.sandbox));
         printSuccess(`Trust: ${this._trustLabel(this.trustMode)}`);
         break;
       }
@@ -815,12 +859,17 @@ export class MercuryRepl {
         this.memory = new MemoryManager(this.workspace);
         this.log = new ConversationLog(this.workspace);
         this.rollback = new RollbackManager(this.workspace);
-        // Update ToolExecutor and rebuild system prompt
+        // Update ToolExecutor, sandbox, and rebuild system prompt
         this.toolExecutor.workspace = this.workspace;
-        this.conversation.updateSystemPrompt(buildSystemPrompt(this.workspace, this.trustMode));
+        this.sandbox.workspace = this.workspace;
+        this.conversation.updateSystemPrompt(buildSystemPrompt(this.workspace, this.trustMode, this.sandbox));
         printSuccess(`Workspace: ${this.workspace}`);
         break;
       }
+
+      case "/sandbox":
+        await this._handleSandbox(parts.slice(1));
+        break;
 
       case "/history":
         await this._handleHistory(parts.slice(1));
@@ -884,6 +933,7 @@ export class MercuryRepl {
       const GR = "\x1b[32m", D = "\x1b[2m";
       console.log("");
       console.log(`${B}${C}  \u256d\u2500 Settings \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256e${R}`);
+      const sandboxStatus = this.sandbox.getStatus();
       const rows = [
         ["model", this.client.config.model],
         ["reasoning", this.client.config.reasoning_effort],
@@ -895,6 +945,7 @@ export class MercuryRepl {
         ["api_key", this.client.apiKey ? this.client.apiKey.slice(0, 8) + "..." + this.client.apiKey.slice(-4) : "(not set)"],
         ["workspace", this.workspace],
         ["trust", this.trustMode],
+        ["sandbox", `${sandboxStatus.mode} (${sandboxStatus.backend})`],
         ["supercompress", this.superCompress ? "ON" : "OFF"],
         ["contextsearch", this.contextSearchEnabled ? "ON" : "OFF"],
       ];
@@ -945,6 +996,73 @@ export class MercuryRepl {
     printSuccess(`${subCmd} updated.`);
   }
 
+  // ── Sandbox management ──────────────────────────────────────────────
+
+  async _handleSandbox(args) {
+    const subCmd = args[0]?.toLowerCase();
+
+    // No args: show current sandbox status
+    if (!subCmd) {
+      const E = "\x1b[", R = `${E}0m`, B = `${E}1m`, D = `${E}2m`;
+      const C = `${E}38;5;87m`, G = `${E}90m`, GR = `${E}32m`;
+
+      const status = this.sandbox.getStatus();
+      console.log("");
+      console.log(`${B}${C}  ╭─ Sandbox ─────────────────────────────────────────────╮${R}`);
+      const rows = [
+        ["mode", status.mode],
+        ["backend", status.backend],
+        ["sub-agents", this.sandbox.sandboxSubAgents ? "sandboxed" : "unsandboxed"],
+        ["network", this.sandbox.allowNetwork ? "allowed" : "blocked"],
+        ["domains", this.sandbox.allowedDomains.length > 0 ? this.sandbox.allowedDomains.join(", ") : "(all)"],
+      ];
+      for (const [k, v] of rows) {
+        console.log(`${G}  │${R}  ${GR}${k.padEnd(15)}${R} ${D}${v}${R}`);
+      }
+      console.log(`${B}${C}  ╰─────────────────────────────────────────────────────────╯${R}`);
+      console.log("");
+      printInfo("Usage: /sandbox on|off|strict|subagents|network");
+      console.log("");
+      return;
+    }
+
+    // Change sandbox mode
+    if (subCmd === "on" || subCmd === "1") {
+      this.sandbox.mode = SANDBOX_ON;
+      this.toolExecutor.sandbox = this.sandbox;
+      printSuccess("Sandbox: ON (workspace-scoped, resource limits)");
+      return;
+    }
+    if (subCmd === "strict" || subCmd === "2") {
+      this.sandbox.mode = SANDBOX_STRICT;
+      this.toolExecutor.sandbox = this.sandbox;
+      printSuccess("Sandbox: STRICT (read-only root, network restricted)");
+      return;
+    }
+    if (subCmd === "off" || subCmd === "3") {
+      this.sandbox.mode = SANDBOX_OFF;
+      this.toolExecutor.sandbox = this.sandbox;
+      printWarning("Sandbox: OFF — no isolation active");
+      return;
+    }
+
+    // Toggle sub-agent sandboxing
+    if (subCmd === "subagents") {
+      this.sandbox.sandboxSubAgents = !this.sandbox.sandboxSubAgents;
+      printInfo(`Sub-agent sandbox: ${this.sandbox.sandboxSubAgents ? "ON" : "OFF"}`);
+      return;
+    }
+
+    // Toggle network access
+    if (subCmd === "network") {
+      this.sandbox.allowNetwork = !this.sandbox.allowNetwork;
+      printInfo(`Sandbox network: ${this.sandbox.allowNetwork ? "allowed" : "blocked"}`);
+      return;
+    }
+
+    printError(`Unknown sandbox option: ${subCmd}. Options: on, off, strict, subagents, network`);
+  }
+
   // ── Context info ─────────────────────────────────────────────────────────
 
   _printContextInfo() {
@@ -979,6 +1097,8 @@ export class MercuryRepl {
     console.log(`${G}  │${R}  ${GR}Session${R}      ${D}${this._sessionId}${R}`);
     console.log(`${G}  │${R}  ${GR}Compression${R}  ${D}${this.superCompress ? "Super (50%)" : "Normal (80%)"}${R}`);
     console.log(`${G}  │${R}  ${GR}Estimation${R}   ${D}Codex-style (bytes÷4 + API usage)${R}`);
+    const sbStatus = this.sandbox.getStatus();
+    console.log(`${G}  │${R}  ${GR}Sandbox${R}      ${D}${sbStatus.label}${R}`);
     console.log(`${G}  │${R}`);
     console.log(`${B}${C}  ╰──────────────────────────────────────────────────────╯${R}`);
     console.log("");

@@ -7,6 +7,7 @@ import path from 'node:path';
 import { SubAgent, runSubAgentTeam } from '../subagent.js';
 import { MercuryClient } from '../client.js';
 import { AgentTabBar } from '../ui/agent-tabs.js';
+import { Sandbox, SANDBOX_OFF } from '../sandbox.js';
 
 // ── Sanitized environment for child processes ────────────────────────────────
 // Strip keys that commonly hold secrets to prevent exfiltration via Bash
@@ -141,6 +142,7 @@ export class ToolExecutor {
    * @param {string} [options.baseURL] - API base URL for sub-agent calls
    * @param {string} [options.workspace] - Workspace root directory
    * @param {string} [options.trustMode] - Trust mode: 'readonly', 'approval', 'open'
+   * @param {Sandbox} [options.sandbox] - Sandbox instance for isolation enforcement
    */
   constructor(options = {}) {
     this._clientOptions = {
@@ -149,6 +151,8 @@ export class ToolExecutor {
     };
     this.workspace = options.workspace || process.cwd();
     this.trustMode = options.trustMode || 'approval';
+    /** @type {Sandbox|null} */
+    this.sandbox = options.sandbox || null;
   }
 
   /**
@@ -229,6 +233,12 @@ export class ToolExecutor {
       return 'Error: file_path is required.';
     }
 
+    // Sandbox path check
+    if (this.sandbox?.enabled) {
+      const check = this.sandbox.checkPath(file_path, 'read');
+      if (!check.allowed) return `Error: ${check.reason}`;
+    }
+
     let content;
     try {
       content = await readFile(file_path, 'utf-8');
@@ -307,6 +317,12 @@ export class ToolExecutor {
       return `Error: Write blocked — path is outside workspace: ${file_path}`;
     }
 
+    // Sandbox path check (write)
+    if (this.sandbox?.enabled) {
+      const check = this.sandbox.checkPath(file_path, 'write');
+      if (!check.allowed) return `Error: ${check.reason}`;
+    }
+
     try {
       const dir = path.dirname(file_path);
       await mkdir(dir, { recursive: true });
@@ -352,6 +368,12 @@ export class ToolExecutor {
     }
     if (!this._isInWorkspace(file_path)) {
       return `Error: Edit blocked — path is outside workspace: ${file_path}`;
+    }
+
+    // Sandbox path check (write)
+    if (this.sandbox?.enabled) {
+      const check = this.sandbox.checkPath(file_path, 'write');
+      if (!check.allowed) return `Error: ${check.reason}`;
     }
 
     let content;
@@ -426,8 +448,13 @@ export class ToolExecutor {
       return 'Error: Bash is disabled in read-only mode.';
     }
 
+    // Sandbox: wrap command in isolation if enabled
+    const execCommand = this.sandbox?.enabled
+      ? this.sandbox.wrapCommand(command, { cwd: this.workspace })
+      : command;
+
     try {
-      const result = execSync(command, {
+      const result = execSync(execCommand, {
         encoding: 'utf-8',
         timeout,
         maxBuffer: 10 * 1024 * 1024, // 10 MB
@@ -652,6 +679,7 @@ export class ToolExecutor {
       ...this._clientOptions,
       workspace: this.workspace,
       trustMode: this.trustMode,
+      sandboxConfig: this.sandbox?.toSubAgentConfig(),
     });
     return await agent.run();
   }
@@ -674,6 +702,12 @@ export class ToolExecutor {
     }
     if (!this._isInWorkspace(file_path)) {
       return `Error: Patch blocked — path is outside workspace: ${file_path}`;
+    }
+
+    // Sandbox path check (write)
+    if (this.sandbox?.enabled) {
+      const check = this.sandbox.checkPath(file_path, 'write');
+      if (!check.allowed) return `Error: ${check.reason}`;
     }
 
     let content;
@@ -864,6 +898,12 @@ export class ToolExecutor {
       return `Error: Too many redirects (>${MAX_REDIRECTS})`;
     }
 
+    // Sandbox URL check
+    if (this.sandbox?.enabled) {
+      const check = this.sandbox.checkUrl(url);
+      if (!check.allowed) return `Error: ${check.reason}`;
+    }
+
     // In readonly mode, only allow GET without body (prevent data exfiltration)
     if (this.trustMode === 'readonly') {
       if (method.toUpperCase() !== 'GET') {
@@ -894,6 +934,11 @@ export class ToolExecutor {
         // Follow redirects per RFC: 301/302/303 change to GET, 307/308 preserve method
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           const redirectUrl = new URL(res.headers.location, url).toString();
+          // Validate redirect target protocol (prevent file://, ftp://, etc.)
+          if (!redirectUrl.startsWith('http://') && !redirectUrl.startsWith('https://')) {
+            resolve(`Error: Redirect to non-HTTP protocol blocked: ${redirectUrl}`);
+            return;
+          }
           if (res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 303) {
             resolve(this._fetch({ url: redirectUrl, method: 'GET', headers }, _redirectCount + 1));
           } else {
@@ -969,6 +1014,7 @@ export class ToolExecutor {
         ...this._clientOptions,
         workspace: this.workspace,
         trustMode: this.trustMode,
+        sandboxConfig: this.sandbox?.toSubAgentConfig(),
         onAgentProgress: (agentIndex, event, detail) => {
           if (event === 'done' || event === 'error') {
             tabBar.finish(agentIndex, event === 'done', detail);

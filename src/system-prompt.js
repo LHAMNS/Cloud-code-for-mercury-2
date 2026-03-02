@@ -1,8 +1,9 @@
 // Mercury Code - System Prompt
 // Concise tool descriptions to minimize token usage while maximizing model understanding
 
-export function buildSystemPrompt(cwd, trustMode) {
+export function buildSystemPrompt(cwd, trustMode, sandbox) {
   const trustNote = _trustSection(trustMode);
+  const sandboxNote = _sandboxSection(sandbox);
 
   return `You are Mercury Code, an AI coding assistant (Mercury-2 diffusion model, Inception Labs). You run in the user's terminal.
 
@@ -42,6 +43,8 @@ You are an autonomous coding agent. Chain tool calls to complete complex tasks.
 
 ${trustNote}
 
+${sandboxNote}
+
 ## Safety
 
 - **Workspace boundary**: All file writes/edits/patches MUST target files inside the workspace (${cwd}). Attempts to write outside are blocked by the system.
@@ -76,6 +79,34 @@ Memory file: \`.mercury/memory.md\` — key facts auto-saved across compressions
 - Platform: ${process.platform}
 - Node: ${process.version}
 `;
+}
+
+function _sandboxSection(sandbox) {
+  if (!sandbox || !sandbox.enabled) {
+    return `## Sandbox: OFF
+No sandbox isolation is active. Standard workspace boundary enforcement still applies.`;
+  }
+
+  const status = sandbox.getStatus();
+  if (sandbox.mode === "strict") {
+    return `## Sandbox: STRICT (${status.backend})
+All tool execution runs in an isolated sandbox:
+- Bash commands execute in a namespace-isolated environment with read-only root filesystem
+- Only the workspace directory (${sandbox.workspace}) is writable
+- Resource limits enforced: memory 2GB, file size 100MB, processes 256, CPU time 300s
+- Sensitive paths blocked: ~/.ssh, ~/.aws, ~/.gnupg, .env files, etc.
+- Network access for Bash: ${sandbox.allowNetwork ? "allowed" : "BLOCKED"}
+- Sub-agents: ${sandbox.sandboxSubAgents ? "also sandboxed" : "not sandboxed"}
+- HTTP Fetch: HTTPS only, plain HTTP blocked${sandbox.allowedDomains.length > 0 ? `, allowed domains: ${sandbox.allowedDomains.join(", ")}` : ""}`;
+  }
+
+  return `## Sandbox: ON (${status.backend})
+Tool execution runs with sandbox protections:
+- Bash commands have resource limits (memory 2GB, file size 100MB, processes 256)
+- Sensitive credential paths blocked: ~/.ssh, ~/.aws, ~/.gnupg, .env files, etc.
+- System directories blocked for writes: /etc, /usr, /bin, /sbin, etc.
+- Sub-agents: ${sandbox.sandboxSubAgents ? "also sandboxed" : "not sandboxed"}
+- Network access: allowed`;
 }
 
 function _trustSection(trustMode) {

@@ -31,6 +31,9 @@ Options:
   -h, --help        Show this help message and exit
   -v, --version     Print the version number and exit
       --verbose     Enable verbose / debug output
+      --no-sandbox  Disable sandbox isolation
+      --sandbox <mode>
+                    Set sandbox mode: on (default), strict, off
   -p, --prompt <text>
                     Run in non-interactive (single-shot) mode.
                     Sends the given prompt, prints the response, and exits.
@@ -48,6 +51,7 @@ function printVersion() {
 
 let verbose = false;
 let promptText = null;
+let sandboxMode = "on";
 
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
@@ -64,6 +68,26 @@ for (let i = 0; i < args.length; i++) {
 
   if (arg === "--verbose") {
     verbose = true;
+    continue;
+  }
+
+  if (arg === "--no-sandbox") {
+    sandboxMode = "off";
+    continue;
+  }
+
+  if (arg === "--sandbox") {
+    const next = args[i + 1];
+    if (!next || next.startsWith("-")) {
+      console.error("Error: --sandbox requires a mode: on, strict, off");
+      process.exit(1);
+    }
+    if (!["on", "strict", "off"].includes(next)) {
+      console.error("Error: --sandbox mode must be: on, strict, or off");
+      process.exit(1);
+    }
+    sandboxMode = next;
+    i++;
     continue;
   }
 
@@ -109,7 +133,7 @@ process.on("unhandledRejection", (reason) => {
 // ---------------------------------------------------------------------------
 
 async function main() {
-  const repl = new MercuryRepl({ verbose });
+  const repl = new MercuryRepl({ verbose, sandboxMode });
 
   if (promptText) {
     // Non-interactive / single-shot mode

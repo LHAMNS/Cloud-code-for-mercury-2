@@ -112,6 +112,7 @@ export function printHelp() {
       ["/config", "Show raw config (read-only)"],
     ]],
     ["Features", [
+      ["/sandbox [mode]", "on | off | strict | subagents | network"],
       ["/supercompress", "Toggle aggressive compression"],
       ["/contextsearch", "Toggle context search tool"],
     ]],

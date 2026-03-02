@@ -11,6 +11,7 @@ import { compressContext } from "./context.js";
 import { MODEL_LIMITS } from "./config.js";
 import { MemoryManager, ConversationLog } from "./memory.js";
 import { RollbackManager } from "./rollback.js";
+import { Sandbox, SANDBOX_OFF } from "./sandbox.js";
 import path from "node:path";
 
 // Maximum tool turns per sub-agent (more conservative than main agent)
@@ -56,6 +57,7 @@ export class SubAgent {
    * @param {string} [options.workspace] - Workspace root directory
    * @param {string} [options.trustMode] - Trust mode: 'readonly', 'approval', 'open'
    * @param {Function} [options.onProgress] - Callback: (event, detail) => void
+   * @param {object} [options.sandboxConfig] - Sandbox config from parent
    */
   constructor(options = {}) {
     this.task = options.task || "";
@@ -66,12 +68,24 @@ export class SubAgent {
       apiKey: options.apiKey,
       baseURL: options.baseURL,
     });
-    // Pass workspace and trustMode to ToolExecutor for enforcement
+
+    // Initialize sandbox for this sub-agent (inherits from parent config)
+    this.sandbox = null;
+    if (options.sandboxConfig && options.sandboxConfig.mode !== SANDBOX_OFF) {
+      this.sandbox = new Sandbox({
+        ...options.sandboxConfig,
+        workspace: this.workspace,
+      });
+      this.sandbox.init();
+    }
+
+    // Pass workspace, trustMode, and sandbox to ToolExecutor for enforcement
     this.toolExecutor = new ToolExecutor({
       apiKey: options.apiKey,
       baseURL: options.baseURL,
       workspace: this.workspace,
       trustMode: this.trustMode,
+      sandbox: this.sandbox,
     });
     this.messages = [];
     this._turnCount = 0;
@@ -294,7 +308,7 @@ function _trunc(s, max) {
  * @returns {Promise<string[]>} Array of results from each sub-agent
  */
 export async function runSubAgentTeam(tasks, options = {}) {
-  const { onAgentProgress, workspace, trustMode, ...restOptions } = options;
+  const { onAgentProgress, workspace, trustMode, sandboxConfig, ...restOptions } = options;
 
   const agents = tasks.map(
     (t, i) =>
@@ -303,6 +317,7 @@ export async function runSubAgentTeam(tasks, options = {}) {
         ...restOptions,
         workspace,
         trustMode,
+        sandboxConfig,
         onProgress: onAgentProgress
           ? (event, detail) => onAgentProgress(i, event, detail)
           : null,

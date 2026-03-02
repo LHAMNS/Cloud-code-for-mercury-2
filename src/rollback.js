@@ -5,8 +5,17 @@
 //   2. Context-only: restore conversation context only (keep file changes)
 
 import { readFile, writeFile, mkdir, readdir, rm } from "node:fs/promises";
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import path from "node:path";
+
+/**
+ * Validate a git ref to prevent command injection.
+ * Only allows hex hashes, branch-like names, and common refs.
+ */
+function isValidGitRef(ref) {
+  if (!ref || typeof ref !== "string") return false;
+  return /^[a-fA-F0-9]+$/.test(ref) && ref.length >= 7 && ref.length <= 40;
+}
 
 /**
  * Checkpoint represents a snapshot at a specific point in the conversation.
@@ -116,8 +125,11 @@ export class RollbackManager {
         } catch {
           // Stash may fail if there are no changes; continue anyway
         }
-        // Restore files to the checkpoint's commit state
-        execSync(`git checkout ${cp.gitHash} -- .`, {
+        // Restore files to the checkpoint's commit state (use execFileSync to prevent injection)
+        if (!isValidGitRef(cp.gitHash)) {
+          throw new Error(`Invalid git hash: ${cp.gitHash}`);
+        }
+        execFileSync("git", ["checkout", cp.gitHash, "--", "."], {
           cwd: this.cwd,
           stdio: "pipe",
         });

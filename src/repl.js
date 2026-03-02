@@ -711,14 +711,20 @@ export class MercuryRepl {
       }
     }
 
-    // Approval mode: Bash always needs approval
-    if (this.trustMode === TRUST_APPROVAL && toolName === "Bash") {
-      return { allowed: true, needsApproval: true, reason: null };
-    }
-
-    // Approval mode: writes within workspace are allowed
-    if (this.trustMode === TRUST_APPROVAL && WRITE_TOOLS.has(toolName)) {
-      return { allowed: true, needsApproval: false };
+    // Approval mode: tools that modify state require explicit user approval
+    if (this.trustMode === TRUST_APPROVAL) {
+      // Bash always needs approval (arbitrary command execution)
+      if (toolName === "Bash") {
+        return { allowed: true, needsApproval: true, reason: null };
+      }
+      // Write/Edit/Patch within workspace need approval (prevent unconfirmed file changes)
+      if (WRITE_TOOLS.has(toolName)) {
+        return { allowed: true, needsApproval: true, reason: null };
+      }
+      // SubAgent/SubAgentTeam need approval (prevent agent bypass of approval policy)
+      if (toolName === "SubAgent" || toolName === "SubAgentTeam" || toolName === "AgentTeams") {
+        return { allowed: true, needsApproval: true, reason: null };
+      }
     }
 
     return { allowed: true, needsApproval: false };

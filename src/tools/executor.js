@@ -3,6 +3,8 @@ import { realpathSync } from 'node:fs';
 import { execSync, execFileSync } from 'node:child_process';
 import http from 'node:http';
 import https from 'node:https';
+import dns from 'node:dns';
+import net from 'node:net';
 import path from 'node:path';
 import { SubAgent, runSubAgentTeam } from '../subagent.js';
 import { MercuryClient } from '../client.js';
@@ -29,6 +31,91 @@ function _sanitizedEnv() {
   }
   // Keep PATH, HOME, USER, SHELL, LANG, TERM, EDITOR for normal operation
   return clean;
+}
+
+// ── SSRF protection: block requests to private/loopback/link-local addresses ─
+
+/**
+ * Check if an IP address is private, loopback, or link-local.
+ * @param {string} ip
+ * @returns {boolean}
+ */
+function _isPrivateIp(ip) {
+  // IPv4 loopback
+  if (ip === '127.0.0.1' || ip.startsWith('127.')) return true;
+  // IPv6 loopback
+  if (ip === '::1' || ip === '::ffff:127.0.0.1') return true;
+  // IPv4 private ranges (RFC 1918)
+  if (ip.startsWith('10.')) return true;
+  if (ip.startsWith('192.168.')) return true;
+  if (/^172\.(1[6-9]|2[0-9]|3[01])\./.test(ip)) return true;
+  // IPv4 link-local
+  if (ip.startsWith('169.254.')) return true;
+  // IPv4 CGNAT
+  if (ip.startsWith('100.64.') || /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(ip)) return true;
+  // IPv6 private / link-local
+  if (ip.startsWith('fc') || ip.startsWith('fd')) return true;  // ULA
+  if (ip.startsWith('fe80:')) return true;  // link-local
+  // Unspecified
+  if (ip === '0.0.0.0' || ip === '::') return true;
+  // Metadata endpoints (cloud)
+  if (ip === '169.254.169.254') return true;
+  return false;
+}
+
+/**
+ * Resolve hostname and check if any resolved address is private/loopback.
+ * Also blocks direct IP access to private ranges.
+ * @param {string} hostname
+ * @returns {Promise<{allowed: boolean, reason?: string}>}
+ */
+async function _checkSsrf(hostname) {
+  // Direct IP literal check
+  if (net.isIP(hostname)) {
+    if (_isPrivateIp(hostname)) {
+      return { allowed: false, reason: `Request to private/loopback address ${hostname} blocked` };
+    }
+    return { allowed: true };
+  }
+
+  // Block common dangerous hostnames
+  const lower = hostname.toLowerCase();
+  if (lower === 'localhost' || lower.endsWith('.local') || lower === 'metadata.google.internal') {
+    return { allowed: false, reason: `Request to ${hostname} blocked (local/metadata hostname)` };
+  }
+
+  // DNS resolution check — resolve hostname and verify all addresses are public
+  try {
+    const addresses = await new Promise((resolve, reject) => {
+      dns.resolve(hostname, (err, addrs) => {
+        if (err) {
+          // Try resolve4 + resolve6
+          dns.resolve4(hostname, (err4, a4) => {
+            if (err4) {
+              dns.resolve6(hostname, (err6, a6) => {
+                if (err6) reject(err6);
+                else resolve(a6);
+              });
+            } else {
+              resolve(a4);
+            }
+          });
+        } else {
+          resolve(addrs);
+        }
+      });
+    });
+
+    for (const addr of addresses) {
+      if (_isPrivateIp(addr)) {
+        return { allowed: false, reason: `${hostname} resolves to private address ${addr}` };
+      }
+    }
+  } catch {
+    // DNS resolution failed — allow the request (it will fail at connect time)
+  }
+
+  return { allowed: true };
 }
 
 // ── Read tool token limit ────────────────────────────────────────────────────
@@ -183,22 +270,57 @@ export class ToolExecutor {
   _isInWorkspace(filePath) {
     try {
       const resolvedWorkspace = realpathSync(this.workspace);
-      // Try realpath first; if file doesn't exist yet, fall back to path.resolve
+      // Try realpath first; if file doesn't exist yet, walk up to the nearest
+      // existing ancestor and resolve ITS real path to catch symlink escapes
+      // (e.g. workspace/symlink-to-etc/passwd would resolve to /etc/passwd).
       let resolvedPath;
       try {
         resolvedPath = realpathSync(filePath);
       } catch {
-        resolvedPath = path.resolve(filePath);
+        resolvedPath = this._resolveViaAncestor(filePath);
       }
       return resolvedPath === resolvedWorkspace ||
         resolvedPath.startsWith(resolvedWorkspace + path.sep);
     } catch {
-      // If workspace itself doesn't exist, fall back to path.resolve
+      // If workspace itself doesn't exist, fall back to strict path.resolve
       const resolvedPath = path.resolve(filePath);
       const resolvedWorkspace = path.resolve(this.workspace);
       return resolvedPath === resolvedWorkspace ||
         resolvedPath.startsWith(resolvedWorkspace + path.sep);
     }
+  }
+
+  /**
+   * Resolve a non-existent path by finding the nearest existing ancestor,
+   * resolving it through realpathSync (following symlinks), then appending
+   * the remaining path segments. This prevents symlink escape attacks where
+   * a symlink inside the workspace points outside it.
+   *
+   * Example: /workspace/evil-link/file.txt where evil-link → /etc
+   *   → ancestor = /workspace/evil-link, realpath = /etc
+   *   → result = /etc/file.txt  (correctly detected as outside workspace)
+   */
+  _resolveViaAncestor(filePath) {
+    const absolute = path.resolve(filePath);
+    let current = absolute;
+    const trailing = [];
+
+    // Walk up until we find an existing path component
+    while (current !== path.dirname(current)) {
+      try {
+        const real = realpathSync(current);
+        // Append trailing segments to the resolved ancestor
+        return trailing.length > 0
+          ? path.join(real, ...trailing.reverse())
+          : real;
+      } catch {
+        trailing.push(path.basename(current));
+        current = path.dirname(current);
+      }
+    }
+
+    // Reached filesystem root without finding existing path — use absolute
+    return absolute;
   }
 
   /**
@@ -958,6 +1080,13 @@ export class ToolExecutor {
       if (!check.allowed) return `Error: ${check.reason}`;
     }
 
+    // SSRF protection: resolve hostname and block private/loopback addresses
+    const parsedUrl = new URL(url);
+    const ssrfCheck = await _checkSsrf(parsedUrl.hostname);
+    if (!ssrfCheck.allowed) {
+      return `Error: SSRF blocked — ${ssrfCheck.reason}`;
+    }
+
     // In readonly mode, only allow GET without body (prevent data exfiltration)
     if (this.trustMode === 'readonly') {
       if (method.toUpperCase() !== 'GET') {
@@ -969,7 +1098,6 @@ export class ToolExecutor {
     }
 
     return new Promise((resolve) => {
-      const parsedUrl = new URL(url);
       const lib = parsedUrl.protocol === 'https:' ? https : http;
 
       const options = {

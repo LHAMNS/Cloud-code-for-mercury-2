@@ -185,6 +185,6 @@ All operations are allowed within the workspace. File writes/edits/patches outsi
     case "approval":
     default:
       return `## Permissions: Approval Mode
-Read operations are always allowed. Write/Edit/Patch within the workspace are auto-approved. Bash commands require user approval. File operations outside the workspace require user approval.`;
+Read and search operations are always allowed. Write/Edit/Patch, Bash, SubAgent, SubAgentTeam, and AgentTeams all require explicit user approval before execution. File operations outside the workspace are blocked (use /trust outside to toggle).`;
   }
 }

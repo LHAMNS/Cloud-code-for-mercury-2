@@ -13,7 +13,7 @@
 //   Java                → jdtls
 //   C/C++               → clangd
 
-import { execSync, spawn } from "node:child_process";
+import { execSync, execFileSync, spawn } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
 
@@ -270,13 +270,14 @@ export class LspClient {
   _findCmd() {
     const config = this._config;
     try {
-      execSync(`which ${config.cmd}`, { stdio: "pipe" });
+      // Use execFileSync to avoid shell injection — "which" receives cmd as a safe argv element
+      execFileSync("which", [config.cmd], { stdio: "pipe", timeout: 5000 });
       return config.cmd;
     } catch {
       // Try fallback
       if (config.fallbackCmd) {
         try {
-          execSync(`which ${config.fallbackCmd}`, { stdio: "pipe" });
+          execFileSync("which", [config.fallbackCmd], { stdio: "pipe", timeout: 5000 });
           return config.fallbackCmd;
         } catch {
           return null;

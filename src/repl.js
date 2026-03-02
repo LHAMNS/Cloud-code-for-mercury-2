@@ -665,6 +665,8 @@ export class MercuryRepl {
     // Fetch: special handling — restrict by trust mode
     if (toolName === "Fetch") {
       const method = (args.method || "GET").toUpperCase();
+      // Detect query parameters in URL (data exfiltration risk)
+      const hasQuery = args.url && /\?[^#]/.test(args.url);
       if (this.trustMode === TRUST_READONLY) {
         if (method !== "GET") {
           return { allowed: false, needsApproval: false, reason: `Read-only mode: only GET requests allowed (attempted ${method})` };
@@ -672,11 +674,23 @@ export class MercuryRepl {
         if (args.body) {
           return { allowed: false, needsApproval: false, reason: "Read-only mode: request body not allowed" };
         }
+        if (hasQuery) {
+          return { allowed: false, needsApproval: false, reason: "Read-only mode: URL query parameters not allowed (risk of data exfiltration)" };
+        }
         return { allowed: true, needsApproval: false };
       }
-      // In approval mode, POST/PUT/DELETE with body require approval (prevent data exfiltration)
-      if (this.trustMode === TRUST_APPROVAL && method !== "GET" && args.body) {
-        return { allowed: true, needsApproval: true, reason: `Fetch ${method} with body requires approval` };
+      // In approval mode, any "non-pure GET" requires approval:
+      //   method != GET, has query params, or has body → approval needed
+      if (this.trustMode === TRUST_APPROVAL) {
+        if (method !== "GET") {
+          return { allowed: true, needsApproval: true, reason: `Fetch ${method} requires approval` };
+        }
+        if (args.body) {
+          return { allowed: true, needsApproval: true, reason: "Fetch GET with body requires approval" };
+        }
+        if (hasQuery) {
+          return { allowed: true, needsApproval: true, reason: "Fetch with URL query parameters requires approval (data exfiltration risk)" };
+        }
       }
       return { allowed: true, needsApproval: false };
     }
@@ -948,10 +962,27 @@ export class MercuryRepl {
             printToolCall(fnName, args);
           }
 
+          // One-time outside-workspace bypass: if user approved an outside-workspace
+          // write, temporarily allow the executor to bypass boundary check for THIS
+          // single call only. The flag is cleared in the finally block — no persistent backdoor.
+          const isOutsideApproved = perm.needsApproval && perm.reason &&
+            perm.reason.includes("outside workspace");
+          if (isOutsideApproved) {
+            this.toolExecutor._allowOutsideOnce = true;
+          }
+
           spinner.start(`Running ${fnName}...`);
-          const toolStart = Date.now();
-          const result = await this.toolExecutor.execute(fnName.toLowerCase(), args);
-          const toolElapsed = Date.now() - toolStart;
+          let result, toolElapsed;
+          try {
+            const toolStart = Date.now();
+            result = await this.toolExecutor.execute(fnName.toLowerCase(), args);
+            toolElapsed = Date.now() - toolStart;
+          } finally {
+            // Always clear the one-time bypass flag — no persistent backdoor
+            if (isOutsideApproved) {
+              this.toolExecutor._allowOutsideOnce = false;
+            }
+          }
           spinner.stop();
           printToolResult(result, toolElapsed);
           // Wrap tool result in content fence to mitigate prompt injection

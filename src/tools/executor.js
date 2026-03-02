@@ -295,6 +295,13 @@ export class ToolExecutor {
     this._lspClient = null;
     /** @type {Map|null} Cached agent definitions */
     this._agents = null;
+    /**
+     * One-time bypass for outside-workspace writes.
+     * Set to true before executing an approved outside-workspace operation,
+     * then cleared immediately after (in a finally block) to avoid persistent backdoor.
+     * @type {boolean}
+     */
+    this._allowOutsideOnce = false;
   }
 
   /**
@@ -517,7 +524,7 @@ export class ToolExecutor {
     if (this.trustMode === 'readonly') {
       return 'Error: Write is disabled in read-only mode.';
     }
-    if (!this._isInWorkspace(file_path)) {
+    if (!this._isInWorkspace(file_path) && !this._allowOutsideOnce) {
       return `Error: Write blocked — path is outside workspace: ${file_path}`;
     }
 
@@ -578,7 +585,7 @@ export class ToolExecutor {
     if (this.trustMode === 'readonly') {
       return 'Error: Edit is disabled in read-only mode.';
     }
-    if (!this._isInWorkspace(file_path)) {
+    if (!this._isInWorkspace(file_path) && !this._allowOutsideOnce) {
       return `Error: Edit blocked — path is outside workspace: ${file_path}`;
     }
 
@@ -1000,7 +1007,7 @@ export class ToolExecutor {
     if (this.trustMode === 'readonly') {
       return 'Error: Patch is disabled in read-only mode.';
     }
-    if (!this._isInWorkspace(file_path)) {
+    if (!this._isInWorkspace(file_path) && !this._allowOutsideOnce) {
       return `Error: Patch blocked — path is outside workspace: ${file_path}`;
     }
 
@@ -1222,13 +1229,16 @@ export class ToolExecutor {
       return `Error: SSRF blocked — ${ssrfCheck.reason}`;
     }
 
-    // In readonly mode, only allow GET without body (prevent data exfiltration)
+    // In readonly mode, only allow pure GET (no body, no query params — prevent data exfiltration)
     if (this.trustMode === 'readonly') {
       if (method.toUpperCase() !== 'GET') {
         return `Error: Only GET requests are allowed in read-only mode (attempted ${method.toUpperCase()}).`;
       }
       if (body) {
         return 'Error: Request body is not allowed in read-only mode.';
+      }
+      if (parsedUrl.search && parsedUrl.search.length > 1) {
+        return 'Error: URL query parameters are not allowed in read-only mode (risk of data exfiltration via query string).';
       }
     }
 

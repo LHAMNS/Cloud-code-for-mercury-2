@@ -560,15 +560,13 @@ export class SubAgent {
             }
           }
 
-          // Block Fetch POST with body in sub-agents (approval mode) — prevent exfiltration
+          // Block ALL Fetch in sub-agents (approval mode) — prevent data exfiltration
+          // via GET query params, POST body, or any other method
           if (this.trustMode === "approval" && fnName.toLowerCase() === "fetch") {
-            const method = (args.method || "GET").toUpperCase();
-            if (method !== "GET" && args.body) {
-              const errMsg = `Error: Fetch ${method} with body is not available to sub-agents in approval mode.`;
-              this._emit("tool_result", `${fnName} blocked`);
-              this.messages.push({ role: "tool", tool_call_id: tc.id, content: errMsg });
-              continue;
-            }
+            const errMsg = "Error: Fetch is completely disabled for sub-agents in approval mode (prevents data exfiltration via URL query params or request body).";
+            this._emit("tool_result", `${fnName} blocked`);
+            this.messages.push({ role: "tool", tool_call_id: tc.id, content: errMsg });
+            continue;
           }
 
           // Emit tool call event with formatted detail

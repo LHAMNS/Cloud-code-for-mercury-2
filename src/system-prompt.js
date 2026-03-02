@@ -36,6 +36,8 @@ Filesystem tools (use absolute paths):
 - **ListDir**(path?, max_depth?, show_hidden?) — Tree-view directory listing.
 - **Diff**(file_a?, file_b?, git_ref?) — File diff or git changes.
 - **Fetch**(url, method?, headers?, body?) — HTTP request. 30s timeout.
+- **Lsp**(action, file_path?, line?, character?, query?) — Language server: definition, references, hover, symbols, workspace_symbols, diagnostics.
+- **AstSearch**(action, query?, kind?, language?, file_path?) — Structural code search: search (find symbols) or outline (file structure).
 ${_labsToolsSection()}
 
 ## Behavior
@@ -131,17 +133,8 @@ Tool execution runs with sandbox protections:
  * Labs tools are only listed when their feature is active.
  */
 function _labsToolsSection() {
+  // NOTE: Lsp and AstSearch are core tools — always listed above, not gated here.
   const lines = [];
-
-  // LSP — gated by labs "lsp"
-  if (labs.isToolAllowed("Lsp")) {
-    lines.push('- **Lsp**(action, file_path?, line?, character?, query?) — Language server: definition, references, hover, symbols, workspace_symbols, diagnostics.');
-  }
-
-  // AST Search — gated by labs "ast-search"
-  if (labs.isToolAllowed("AstSearch")) {
-    lines.push('- **AstSearch**(action, query?, kind?, language?, file_path?) — Structural code search: search (find symbols) or outline (file structure).');
-  }
 
   // Context Search — gated by labs "context-search"
   if (labs.isToolAllowed("ContextSearch")) {

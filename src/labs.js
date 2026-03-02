@@ -84,23 +84,8 @@ const FEATURES = [
     requires: ["subagent"],
   },
 
-  // ── Code Intelligence ──────────────────────────────────────────────────
-  {
-    id: "lsp",
-    name: "LSP Integration",
-    category: "Code Intelligence",
-    desc: "Language Server Protocol — go-to-definition, references, hover, diagnostics",
-    default: true,
-    tools: ["Lsp"],
-  },
-  {
-    id: "ast-search",
-    name: "AST Search",
-    category: "Code Intelligence",
-    desc: "Structural code search — find symbols by type (function, class, method, etc.)",
-    default: true,
-    tools: ["AstSearch"],
-  },
+  // NOTE: LSP and AstSearch are core tools (always available, not labs-gated).
+  // They are read-only, zero-risk, and fundamental to code intelligence.
 
   // ── Context & Memory ───────────────────────────────────────────────────
   {

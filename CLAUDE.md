@@ -40,6 +40,7 @@ Mercury Code is an interactive AI coding assistant CLI powered by the **Mercury-
 │   ├── lsp.js               # LspClient — Language Server Protocol integration (TS, Python, Go, Rust, C++)
 │   ├── ast-search.js        # AST symbol search via regex patterns (zero-dep ctags-like approach)
 │   ├── project-config.js    # .mercury.md / MERCURY.md project config loading
+│   ├── i18n.js              # Internationalization — English/Chinese string tables, locale detection
 │   ├── tools/
 │   │   ├── definitions.js   # OpenAI function-calling tool schemas (16 tools)
 │   │   └── executor.js      # ToolExecutor — tool dispatch, security enforcement, SSRF protection
@@ -146,6 +147,16 @@ Experimental features behind a master switch + per-feature toggles:
 - Languages: TypeScript/JavaScript, Python, Go, Rust, C/C++
 - Core tool — always available, not labs-gated
 
+### Internationalization (`src/i18n.js`)
+- Zero-dependency i18n system with ~200 translation keys
+- Supported locales: English (`en`) and Chinese (`zh`)
+- Locale detection chain: persisted config (`~/.mercury/locale.json`) → `MERCURY_LANG` env → `LANG`/`LC_ALL` env → default `en`
+- Core API: `t(key)` for string lookup, `setLocale(locale)`, `getLocale()`, `getSupportedLocales()`, `detectLocale()`
+- Fallback: current locale → English → raw key
+- All user-facing strings in `display.js`, `agent-tabs.js`, and `repl.js` use `t()` calls
+- `/lang [en|zh]` command to switch language at runtime; also accessible via `/settings language <locale>`
+- Locale persistence: saves to `~/.mercury/locale.json` so preference survives between sessions
+
 ### AST Search (`src/ast-search.js`)
 - Regex-based structural code search (ctags-like approach, zero external deps)
 - Extracts: functions, classes, methods, interfaces, types, enums, imports, exports, variables, decorators, structs, traits, macros
@@ -155,7 +166,7 @@ Experimental features behind a master switch + per-feature toggles:
 ### REPL (`src/repl.js`)
 The main 67KB file containing the interactive loop. Key features:
 - Streaming responses with Codex-style framing
-- Slash commands: /help, /clear, /trust, /reasoning, /labs, /sandbox, /agents, /history, /context, /compact, /diff, /copy, /init, /new, /edit, /settings, /supercompress, /contextsearch, /workspace
+- Slash commands: /help, /clear, /trust, /reasoning, /labs, /sandbox, /agents, /history, /context, /compact, /diff, /copy, /init, /new, /edit, /settings, /supercompress, /contextsearch, /workspace, /lang
 - Multiline input (Ctrl+J or `\` to open $EDITOR)
 - `@file` mentions to include file contents in prompts
 - `!cmd` for inline shell command execution
@@ -181,6 +192,7 @@ The main 67KB file containing the interactive loop. Key features:
 | `~/.mercury/` | Global user config |
 | `~/.mercury/config.json` | Default model settings |
 | `~/.mercury/labs.json` | Labs feature state |
+| `~/.mercury/locale.json` | Persisted language preference |
 | `~/.mercury/sessions/` | Saved session history (max 50) |
 | `~/.mercury/mercury.md` | Global custom instructions |
 | `~/.mercury/agents/*.md` | Custom agent definitions (global) |
@@ -244,6 +256,12 @@ When modifying the codebase, be aware of these security patterns:
 1. Add command handling in `src/repl.js` inside the `_handleCommand()` method
 2. Add to the help table in `src/ui/display.js` `printHelp()` function
 3. Add tab-completion entry in the `COMMANDS` array in `src/repl.js`
+4. Add translation keys for all user-facing strings in `src/i18n.js` (both `en` and `zh`)
+
+### Adding new translatable strings
+1. Add the key to both `en` and `zh` string tables in `src/i18n.js`
+2. Use `t("your.key")` in the source file instead of hardcoded strings
+3. Keys are organized by category (e.g., `welcome.*`, `help.*`, `status.*`, `repl.*`, `lang.*`)
 
 ### Adding a new labs feature
 1. Add feature definition to the `FEATURES` array in `src/labs.js`

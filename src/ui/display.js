@@ -4,6 +4,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, basename } from "node:path";
+import { t } from "../i18n.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PKG_VERSION = JSON.parse(
@@ -73,13 +74,13 @@ export async function printWelcome() {
   console.log("");
   console.log(`${fg256(30)}  ${sep}${RESET}`);
   console.log(
-    `${BOLD}${fg256(87)}  Mercury Code${RESET} ${DIM}v${PKG_VERSION}${RESET}  ${GRAY}│${RESET}  ${DIM}Powered by Mercury-2 Diffusion Model${RESET}`
+    `${BOLD}${fg256(87)}  Mercury Code${RESET} ${DIM}v${PKG_VERSION}${RESET}  ${GRAY}│${RESET}  ${DIM}${t("welcome.powered_by")}${RESET}`
   );
   console.log(
-    `${DIM}  Inception Labs${RESET}         ${GRAY}│${RESET}  ${DIM}Type /help for commands, /exit to quit${RESET}`
+    `${DIM}  Inception Labs${RESET}         ${GRAY}│${RESET}  ${DIM}${t("welcome.help_hint")}${RESET}`
   );
   console.log(
-    `${DIM}  ${GRAY}Shortcuts:${RESET} ${DIM}ESC×3${RESET} ${GRAY}rollback${RESET}  ${DIM}↓${RESET} ${GRAY}agents${RESET}  ${DIM}Ctrl+C${RESET} ${GRAY}interrupt${RESET}`
+    `${DIM}  ${GRAY}${t("welcome.shortcuts")}${RESET} ${DIM}ESC×3${RESET} ${GRAY}${t("welcome.shortcut_rollback")}${RESET}  ${DIM}↓${RESET} ${GRAY}${t("welcome.shortcut_agents")}${RESET}  ${DIM}Ctrl+C${RESET} ${GRAY}${t("welcome.shortcut_interrupt")}${RESET}`
   );
   console.log(`${fg256(30)}  ${sep}${RESET}`);
   console.log("");
@@ -94,39 +95,39 @@ function _sleep(ms) {
  */
 export function printHelp() {
   console.log("");
-  console.log(`${BOLD}${fg256(87)}  ╭─ Commands ─────────────────────────────────────────╮${RESET}`);
+  console.log(`${BOLD}${fg256(87)}  ╭─ ${t("help.title")} ─────────────────────────────────────────╮${RESET}`);
 
   const categories = [
-    ["General", [
-      ["/help", "Show this help"],
-      ["/clear", "Clear conversation"],
-      ["/edit", "Open $EDITOR for multiline input"],
-      ["/exit", "Exit Mercury Code"],
+    [t("help.cat_general"), [
+      ["/help", t("help.cmd_help")],
+      ["/clear", t("help.cmd_clear")],
+      ["/edit", t("help.cmd_edit")],
+      ["/exit", t("help.cmd_exit")],
     ]],
-    ["Security & Workspace", [
-      ["/trust <mode>", "readonly | approval | open | outside"],
-      ["/workspace <path>", "View/change workspace directory"],
+    [t("help.cat_security"), [
+      ["/trust <mode>", t("help.cmd_trust")],
+      ["/workspace <path>", t("help.cmd_workspace")],
     ]],
-    ["Model Settings", [
-      ["/reasoning <level>", "instant | low | medium | high"],
-      ["/settings [key val]", "View/modify any setting"],
-      ["/config", "Show raw config (read-only)"],
+    [t("help.cat_model"), [
+      ["/reasoning <level>", t("help.cmd_reasoning")],
+      ["/settings [key val]", t("help.cmd_settings")],
+      ["/config", t("help.cmd_config")],
     ]],
-    ["Features", [
-      ["/labs [feature]", "Labs mode — toggle experimental features"],
-      ["/sandbox [mode]", "on | off | strict | subagents | network"],
-      ["/supercompress", "Toggle aggressive compression"],
-      ["/contextsearch", "Toggle context search tool"],
-      ["/agents [cmd]", "list | create <name> — manage agents"],
+    [t("help.cat_features"), [
+      ["/labs [feature]", t("help.cmd_labs")],
+      ["/sandbox [mode]", t("help.cmd_sandbox")],
+      ["/supercompress", t("help.cmd_supercompress")],
+      ["/contextsearch", t("help.cmd_contextsearch")],
+      ["/agents [cmd]", t("help.cmd_agents")],
     ]],
-    ["Session", [
-      ["/history [cmd]", "save | restore | list"],
-      ["/context", "View context usage & stats"],
-      ["/diff [ref]", "Show git diff (default: HEAD)"],
-      ["/compact", "Compact/summarize conversation"],
-      ["/new", "Start new conversation (saves current)"],
-      ["/copy", "Copy last assistant reply to clipboard"],
-      ["/init", "Create .mercury.md project config"],
+    [t("help.cat_session"), [
+      ["/history [cmd]", t("help.cmd_history")],
+      ["/context", t("help.cmd_context")],
+      ["/diff [ref]", t("help.cmd_diff")],
+      ["/compact", t("help.cmd_compact")],
+      ["/new", t("help.cmd_new")],
+      ["/copy", t("help.cmd_copy")],
+      ["/init", t("help.cmd_init")],
     ]],
   ];
 
@@ -142,14 +143,14 @@ export function printHelp() {
   console.log(`  ${GRAY}│${RESET}`);
   console.log(`${BOLD}${fg256(87)}  ╰──────────────────────────────────────────────────╯${RESET}`);
   console.log("");
-  console.log(`  ${DIM}Shortcuts:${RESET}`);
-  console.log(`    ${YELLOW}ESC×3${RESET}   ${DIM}Enter rollback mode${RESET}`);
-  console.log(`    ${YELLOW}\\${RESET}       ${DIM}Open $EDITOR for multiline input${RESET}`);
-  console.log(`    ${YELLOW}@file${RESET}   ${DIM}Include file contents in prompt${RESET}`);
-  console.log(`    ${YELLOW}Ctrl+C${RESET}  ${DIM}Abort running tool execution${RESET}`);
-  console.log(`    ${YELLOW}Ctrl+J${RESET}  ${DIM}Insert newline (multiline input)${RESET}`);
-  console.log(`    ${YELLOW}!cmd${RESET}    ${DIM}Execute shell command inline${RESET}`);
-  console.log(`    ${YELLOW}Tab${RESET}     ${DIM}Auto-complete slash commands${RESET}`);
+  console.log(`  ${DIM}${t("welcome.shortcuts")}${RESET}`);
+  console.log(`    ${YELLOW}ESC×3${RESET}   ${DIM}${t("help.shortcut_esc")}${RESET}`);
+  console.log(`    ${YELLOW}\\${RESET}       ${DIM}${t("help.shortcut_backslash")}${RESET}`);
+  console.log(`    ${YELLOW}@file${RESET}   ${DIM}${t("help.shortcut_at")}${RESET}`);
+  console.log(`    ${YELLOW}Ctrl+C${RESET}  ${DIM}${t("help.shortcut_ctrlc")}${RESET}`);
+  console.log(`    ${YELLOW}Ctrl+J${RESET}  ${DIM}${t("help.shortcut_ctrlj")}${RESET}`);
+  console.log(`    ${YELLOW}!cmd${RESET}    ${DIM}${t("help.shortcut_bang")}${RESET}`);
+  console.log(`    ${YELLOW}Tab${RESET}     ${DIM}${t("help.shortcut_tab")}${RESET}`);
   console.log("");
 }
 
@@ -253,7 +254,7 @@ function _formatToolArgs(name, args) {
     case "Diff":
       if (args.file_a && args.file_b) return `${basename(args.file_a)} ↔ ${basename(args.file_b)}`;
       if (args.git_ref) return `ref: ${args.git_ref}`;
-      return args.file_a ? `→ ${basename(args.file_a)}` : "uncommitted changes";
+      return args.file_a ? `→ ${basename(args.file_a)}` : t("tool.uncommitted_changes");
     case "ListDir":
       return args.path || "";
     case "ContextSearch":
@@ -279,7 +280,7 @@ export function printToolResult(result, elapsedMs, truncateAt = 600) {
   if (output.length > truncateAt) {
     output =
       output.slice(0, truncateAt) +
-      `\n${DIM}... (${result.length} chars total)${RESET}`;
+      `\n${DIM}... (${result.length} ${t("status.chars_total")})${RESET}`;
   }
   const lines = output.split("\n");
   for (const line of lines) {
@@ -452,12 +453,12 @@ export function printRollbackUI(checkpoints, selectedIndex) {
   process.stdout.write(`${ESC}2J${ESC}H`);
 
   console.log("");
-  console.log(`${BOLD}${fg256(214)}  ╭─ Rollback Mode ────────────────────────────────────╮${RESET}`);
-  console.log(`${GRAY}  │ Use ↑↓ to select checkpoint, Enter to confirm, ESC │${RESET}`);
+  console.log(`${BOLD}${fg256(214)}  ╭─ ${t("rollback.title")} ────────────────────────────────────╮${RESET}`);
+  console.log(`${GRAY}  │ ${t("rollback.hint")} │${RESET}`);
   console.log(`${fg256(214)}  ├───────────────────────────────────────────────────────┤${RESET}`);
 
   if (checkpoints.length === 0) {
-    console.log(`${GRAY}  │   (No checkpoints available)                         │${RESET}`);
+    console.log(`${GRAY}  │   ${t("rollback.no_checkpoints")}                         │${RESET}`);
   } else {
     for (let i = 0; i < checkpoints.length; i++) {
       const cp = checkpoints[i];
@@ -484,14 +485,14 @@ export function printRollbackConfirm(checkpoint, selectedOption) {
   process.stdout.write(`${ESC}2J${ESC}H`);
 
   console.log("");
-  console.log(`${BOLD}${fg256(214)}  ╭─ Confirm Rollback ─────────────────────────────────╮${RESET}`);
-  console.log(`${GRAY}  │ Target: "${checkpoint.userMessage.slice(0, 40)}..."${RESET}`);
+  console.log(`${BOLD}${fg256(214)}  ╭─ ${t("rollback.confirm_title")} ─────────────────────────────────╮${RESET}`);
+  console.log(`${GRAY}  │ ${t("rollback.target")} "${checkpoint.userMessage.slice(0, 40)}..."${RESET}`);
   console.log(`${fg256(214)}  ├───────────────────────────────────────────────────────┤${RESET}`);
 
   const options = [
-    ["Full Rollback", "Restore all file changes + conversation to this checkpoint"],
-    ["Context Only", "Keep files unchanged, only rollback conversation state"],
-    ["Cancel", "Go back, do nothing"],
+    [t("rollback.full"), t("rollback.full_desc")],
+    [t("rollback.context_only"), t("rollback.context_only_desc")],
+    [t("rollback.cancel"), t("rollback.cancel_desc")],
   ];
 
   for (let i = 0; i < options.length; i++) {
@@ -511,17 +512,17 @@ export function printRollbackConfirm(checkpoint, selectedOption) {
  */
 export function printSessionList(sessions) {
   if (sessions.length === 0) {
-    printInfo("No saved sessions. Use /history save to save current session.");
+    printInfo(t("session.no_sessions"));
     return;
   }
 
   console.log("");
-  console.log(`${BOLD}${fg256(87)}  ╭─ Session History ──────────────────────────────────╮${RESET}`);
+  console.log(`${BOLD}${fg256(87)}  ╭─ ${t("session.title")} ──────────────────────────────────╮${RESET}`);
 
   for (let i = 0; i < Math.min(sessions.length, 20); i++) {
     const s = sessions[i];
     const date = new Date(s.timestamp).toLocaleString();
-    const msgs = `${s.messageCount} msgs`;
+    const msgs = `${s.messageCount} ${t("session.msgs")}`;
     const summary =
       s.summary.length > 40 ? s.summary.slice(0, 40) + "..." : s.summary;
 
@@ -534,7 +535,7 @@ export function printSessionList(sessions) {
 
   console.log(`${BOLD}${fg256(87)}  ╰──────────────────────────────────────────────────────╯${RESET}`);
   console.log("");
-  console.log(`  ${DIM}Use /history restore <number> to restore a session${RESET}`);
+  console.log(`  ${DIM}${t("session.restore_hint")}${RESET}`);
   console.log("");
 }
 
@@ -547,7 +548,8 @@ export const spinner = {
   _frameIndex: 0,
   _startTime: 0,
 
-  start(text = "Thinking...") {
+  start(text) {
+    text = text || t("status.thinking");
     if (this._interval) return;
     this._frameIndex = 0;
     this._startTime = Date.now();
@@ -589,7 +591,7 @@ export class AgentPanelManager {
       this.panels.push({
         task: "",
         status: "waiting",    // waiting | thinking | tool | compress | done | error
-        statusText: "Initializing...",
+        statusText: t("status.initializing"),
         lastTool: "",
         done: false,
         success: false,
@@ -632,19 +634,19 @@ export class AgentPanelManager {
       case "thinking":
         panel.status = "thinking";
         panel.turns++;
-        panel.statusText = `Thinking... (Turn ${panel.turns})`;
+        panel.statusText = `${t("status.thinking")} (Turn ${panel.turns})`;
         break;
       case "tool_call":
         panel.status = "tool";
-        panel.statusText = detail || "Executing tool...";
+        panel.statusText = detail || t("status.executing_tool");
         panel.lastTool = detail || "";
         break;
       case "tool_result":
-        panel.statusText = detail || "Processing result...";
+        panel.statusText = detail || t("status.processing_result");
         break;
       case "compressing":
         panel.status = "compress";
-        panel.statusText = "Compressing context...";
+        panel.statusText = t("status.compressing_context");
         break;
     }
   }
@@ -660,10 +662,10 @@ export class AgentPanelManager {
     const elapsed = ((Date.now() - panel.startTime) / 1000).toFixed(1);
     if (success) {
       const chars = summary ? summary.length : 0;
-      panel.statusText = `Done (${panel.turns} turns, ${elapsed}s)`;
-      panel.lastTool = chars > 0 ? `Result: ${chars} chars` : "";
+      panel.statusText = `${t("status.done")} (${panel.turns} ${t("status.turns")}, ${elapsed}s)`;
+      panel.lastTool = chars > 0 ? `${t("status.result")} ${chars} ${t("repl.chars")}` : "";
     } else {
-      panel.statusText = `Error (${elapsed}s)`;
+      panel.statusText = `${t("status.error")} (${elapsed}s)`;
       panel.lastTool = summary ? summary.slice(0, 60) : "";
     }
   }
@@ -740,7 +742,7 @@ export class AgentPanelManager {
       panel.task.length > inner - 14
         ? panel.task.slice(0, inner - 17) + "..."
         : panel.task;
-    const headerContent = `Agent ${index + 1}: ${taskLabel}`;
+    const headerContent = `${t("agent.panel_title")} ${index + 1}: ${taskLabel}`;
     const headerPad = Math.max(0, width - headerContent.length - 4);
     const header =
       `${borderColor}╭─ ${BOLD}${headerContent}${RESET}${borderColor} ${"─".repeat(headerPad)}╮${RESET}`;

@@ -22,6 +22,7 @@ import { discoverAgents, formatAgentList, scaffoldAgent } from "./agent-definiti
 import { loadProjectConfig, findProjectConfig, scaffoldProjectConfig } from "./project-config.js";
 import { setProjectConfig } from "./system-prompt.js";
 import { labs } from "./labs.js";
+import { t, setLocale, getLocale, getSupportedLocales, detectLocale } from "./i18n.js";
 import {
   printWelcome,
   printHelp,
@@ -133,11 +134,14 @@ export class MercuryRepl {
   // ── Interactive mode ─────────────────────────────────────────────────────
 
   async start() {
+    // Detect locale from environment / persisted config before any UI
+    await detectLocale();
+
     const SLASH_CMDS = [
       "/help", "/clear", "/trust", "/workspace", "/reasoning",
       "/supercompress", "/contextsearch", "/sandbox", "/history",
       "/context", "/settings", "/config", "/edit", "/exit",
-      "/agents", "/diff", "/compact", "/new", "/copy", "/init", "/labs",
+      "/agents", "/diff", "/compact", "/new", "/copy", "/init", "/labs", "/lang",
     ];
 
     this._rl = readline.createInterface({
@@ -168,7 +172,7 @@ export class MercuryRepl {
       setProjectConfig(this.workspace, projectConfig);
       if (projectConfig) {
         const configPath = await findProjectConfig(this.workspace);
-        if (configPath) printInfo(`Loaded project config: ${configPath}`);
+        if (configPath) printInfo(`${t("repl.loaded_project_config")} ${configPath}`);
       }
     }
 
@@ -191,10 +195,10 @@ export class MercuryRepl {
       if (this._processing) {
         this._aborted = true;
         spinner.stop();
-        printWarning("Interrupted by user (Ctrl+C).");
+        printWarning(t("repl.interrupted"));
       } else {
         // If not processing, treat as exit hint
-        printInfo("Press Ctrl+C again or type /exit to quit.");
+        printInfo(t("repl.exit_hint"));
       }
     });
 
@@ -244,16 +248,16 @@ export class MercuryRepl {
     const C = `${E}38;5;87m`, G = `${E}90m`, Y = `${E}33m`, GR = `${E}32m`;
 
     console.log("");
-    console.log(`${B}${C}  ╭─ Setup ──────────────────────────────────────────────╮${R}`);
+    console.log(`${B}${C}  ╭─ ${t("setup.title")} ──────────────────────────────────────────────╮${R}`);
     console.log(`${G}  │${R}`);
-    console.log(`${G}  │${R}  ${B}${C}Step 1/2${R}  ${D}Workspace${R}`);
+    console.log(`${G}  │${R}  ${B}${C}Step 1/2${R}  ${D}${t("setup.step_workspace")}${R}`);
     console.log(`${G}  │${R}`);
 
     const cwd = process.cwd();
-    console.log(`${G}  │${R}  ${D}Current directory:${R}`);
+    console.log(`${G}  │${R}  ${D}${t("setup.current_dir")}${R}`);
     console.log(`${G}  │${R}    ${C}${cwd}${R}`);
     console.log(`${G}  │${R}`);
-    console.log(`${G}  │${R}  ${D}Press Enter to accept, or type a new path:${R}`);
+    console.log(`${G}  │${R}  ${D}${t("setup.press_enter")}${R}`);
     console.log(`${G}  │${R}`);
     console.log(`${B}${C}  ╰──────────────────────────────────────────────────────╯${R}`);
 
@@ -264,19 +268,19 @@ export class MercuryRepl {
     this.toolExecutor.workspace = this.workspace;
 
     console.log("");
-    console.log(`${B}${C}  ╭─ Setup ──────────────────────────────────────────────╮${R}`);
+    console.log(`${B}${C}  ╭─ ${t("setup.title")} ──────────────────────────────────────────────╮${R}`);
     console.log(`${G}  │${R}`);
-    console.log(`${G}  │${R}  ${B}${C}Step 2/2${R}  ${D}Trust Mode${R}`);
+    console.log(`${G}  │${R}  ${B}${C}Step 2/2${R}  ${D}${t("setup.step_trust")}${R}`);
     console.log(`${G}  │${R}`);
-    console.log(`${G}  │${R}    ${Y}1${R}  ${D}Read-only${R}      ${G}Model can only read files${R}`);
-    console.log(`${G}  │${R}  ${B}${GR}▸ 2${R}  ${D}Approval${R}       ${G}Asks before writes/commands (recommended)${R}`);
-    console.log(`${G}  │${R}    ${Y}3${R}  ${D}Full open${R}      ${G}All ops within workspace${R}`);
+    console.log(`${G}  │${R}    ${Y}1${R}  ${D}${t("setup.trust_readonly")}${R}      ${G}${t("setup.trust_readonly_desc")}${R}`);
+    console.log(`${G}  │${R}  ${B}${GR}▸ 2${R}  ${D}${t("setup.trust_approval")}${R}       ${G}${t("setup.trust_approval_desc")}${R}`);
+    console.log(`${G}  │${R}    ${Y}3${R}  ${D}${t("setup.trust_open")}${R}      ${G}${t("setup.trust_open_desc")}${R}`);
     console.log(`${G}  │${R}`);
-    console.log(`${G}  │${R}  ${D}Tip: Change later with /trust${R}`);
+    console.log(`${G}  │${R}  ${D}${t("setup.trust_change_tip")}${R}`);
     console.log(`${G}  │${R}`);
     console.log(`${B}${C}  ╰──────────────────────────────────────────────────────╯${R}`);
 
-    const modeStr = await this._ask(`  ${C}Select [2]:${R} `);
+    const modeStr = await this._ask(`  ${C}${t("setup.select")} [2]:${R} `);
     const modeNum = parseInt(modeStr.trim(), 10);
     if (modeNum === 1) this.trustMode = TRUST_READONLY;
     else if (modeNum === 3) this.trustMode = TRUST_OPEN;
@@ -289,22 +293,21 @@ export class MercuryRepl {
     const sandboxStatus = this.sandbox.getStatus();
 
     console.log("");
-    console.log(`${B}${C}  ╭─ Setup ──────────────────────────────────────────────╮${R}`);
+    console.log(`${B}${C}  ╭─ ${t("setup.title")} ──────────────────────────────────────────────╮${R}`);
     console.log(`${G}  │${R}`);
-    console.log(`${G}  │${R}  ${B}${C}Step 3/3${R}  ${D}Sandbox Isolation${R}`);
+    console.log(`${G}  │${R}  ${B}${C}Step 3/3${R}  ${D}${t("setup.step_sandbox")}${R}`);
     console.log(`${G}  │${R}`);
-    console.log(`${G}  │${R}  ${D}Detected backend:${R} ${C}${sandboxStatus.backend}${R}`);
+    console.log(`${G}  │${R}  ${D}${t("setup.detected_backend")}${R} ${C}${sandboxStatus.backend}${R}`);
     console.log(`${G}  │${R}`);
-    console.log(`${G}  │${R}  ${B}${GR}▸ 1${R}  ${D}On${R}          ${G}Workspace-scoped filesystem, resource limits (default)${R}`);
-    console.log(`${G}  │${R}    ${Y}2${R}  ${D}Strict${R}      ${G}Read-only root, no network for Bash, domain allowlist${R}`);
-    console.log(`${G}  │${R}    ${Y}3${R}  ${D}Off${R}         ${G}No sandboxing (not recommended)${R}`);
+    console.log(`${G}  │${R}  ${B}${GR}▸ 1${R}  ${D}${t("setup.sandbox_on")}${R}          ${G}${t("setup.sandbox_on_desc")}${R}`);
+    console.log(`${G}  │${R}    ${Y}2${R}  ${D}${t("setup.sandbox_strict")}${R}      ${G}${t("setup.sandbox_strict_desc")}${R}`);
+    console.log(`${G}  │${R}    ${Y}3${R}  ${D}${t("setup.sandbox_off")}${R}         ${G}${t("setup.sandbox_off_desc")}${R}`);
     console.log(`${G}  │${R}`);
-    console.log(`${G}  │${R}  ${D}Applies to: main agent + all sub-agents${R}`);
-    console.log(`${G}  │${R}  ${D}Tip: Change later with /sandbox${R}`);
+    console.log(`${G}  │${R}  ${D}${t("setup.sandbox_tip")}${R}`);
     console.log(`${G}  │${R}`);
     console.log(`${B}${C}  ╰──────────────────────────────────────────────────────╯${R}`);
 
-    const sandboxStr = await this._ask(`  ${C}Select [1]:${R} `);
+    const sandboxStr = await this._ask(`  ${C}${t("setup.select")} [1]:${R} `);
     const sandboxNum = parseInt(sandboxStr.trim(), 10);
     if (sandboxNum === 2) this.sandbox.mode = SANDBOX_STRICT;
     else if (sandboxNum === 3) this.sandbox.mode = SANDBOX_OFF;
@@ -325,9 +328,9 @@ export class MercuryRepl {
 
   _trustLabel(mode) {
     switch (mode) {
-      case TRUST_READONLY: return "Read-only (only read operations allowed)";
-      case TRUST_APPROVAL: return "Approval (asks before writes/commands)";
-      case TRUST_OPEN: return "Full open (all ops within workspace)";
+      case TRUST_READONLY: return `${t("setup.trust_readonly")} (${t("setup.trust_readonly_desc")})`;
+      case TRUST_APPROVAL: return `${t("setup.trust_approval")} (${t("setup.trust_approval_desc")})`;
+      case TRUST_OPEN: return `${t("setup.trust_open")} (${t("setup.trust_open_desc")})`;
       default: return mode;
     }
   }
@@ -479,12 +482,12 @@ export class MercuryRepl {
           );
         }
 
-        printInfo(`Included @${relPath} (${content.length} chars)`);
+        printInfo(`${t("repl.included_file")} @${relPath} (${content.length} ${t("repl.chars")})`);
       } catch (err) {
         if (err.code === "ENOENT") {
           // Not a real file reference — leave it as-is
         } else {
-          printWarning(`Could not read @${m.rawPath}: ${err.message}`);
+          printWarning(`${t("repl.could_not_read")} @${m.rawPath}: ${err.message}`);
         }
       }
     }
@@ -508,7 +511,7 @@ export class MercuryRepl {
     try {
       await this._sendAndProcess();
     } catch (err) {
-      printError(`Error: ${err.message}`);
+      printError(`${t("repl.error")} ${err.message}`);
       if (this.verbose) console.error(err.stack);
       process.exit(1);
     }
@@ -587,16 +590,16 @@ export class MercuryRepl {
 
     // Backslash alone → open $EDITOR for multiline input
     if (trimmed === "\\") {
-      printInfo(`Opening ${process.env.VISUAL || process.env.EDITOR || "vi"} for multiline input...`);
+      printInfo(`${t("repl.opening_editor")} ${process.env.VISUAL || process.env.EDITOR || "vi"} ${t("repl.for_multiline")}`);
       const editorText = this._openEditor();
       if (!editorText) {
-        printInfo("Editor cancelled (empty input).");
+        printInfo(t("repl.editor_cancelled"));
         this._rl.setPrompt(this._buildPrompt());
     this._rl.prompt();
         return;
       }
       trimmed = editorText;
-      printInfo(`Received ${trimmed.length} chars from editor.`);
+      printInfo(`${t("repl.received_chars")} ${trimmed.length} ${t("repl.chars_from_editor")}`);
     }
 
     // ! prefix → execute shell command inline
@@ -642,7 +645,7 @@ export class MercuryRepl {
     try {
       await this._sendAndProcess();
     } catch (err) {
-      printError(`Unexpected error: ${err.message}`);
+      printError(`${t("repl.unexpected_error")} ${err.message}`);
       if (this.verbose) console.error(err.stack);
     }
 
@@ -854,7 +857,7 @@ export class MercuryRepl {
         if (response.usage) this.conversation.updateUsage(response.usage);
       } catch (err) {
         spinner.stop();
-        printError(`API error: ${err.message}`);
+        printError(`${t("repl.api_error")} ${err.message}`);
         if (this.verbose) console.error(err.stack);
         printResponseFooter();
         return;
@@ -867,7 +870,7 @@ export class MercuryRepl {
         autoRecoverCount < MAX_AUTO_RECOVER
       ) {
         autoRecoverCount++;
-        printInfo(`Output truncated \u2014 auto-recovering (${autoRecoverCount}/${MAX_AUTO_RECOVER})...`);
+        printInfo(`${t("repl.output_truncated")} (${autoRecoverCount}/${MAX_AUTO_RECOVER})...`);
         this.conversation.addAssistantMessage(response.content || "");
         this.conversation.addUserMessage(
           "[System: Your previous output was truncated due to length. Continue from where you left off.]"
@@ -881,7 +884,7 @@ export class MercuryRepl {
         autoRecoverCount = 0;
 
         if (this._toolTurnCount > MAX_TOOL_TURNS) {
-          printError(`Max tool turns (${MAX_TOOL_TURNS}) reached.`);
+          printError(`${t("repl.max_tool_turns")} (${MAX_TOOL_TURNS}) ${t("repl.reached")}`);
           this.conversation.addAssistantMessage(
             response.content || "(Stopped: max tool turns)"
           );
@@ -907,7 +910,7 @@ export class MercuryRepl {
           if (this._aborted) {
             const abortMsg = "Aborted by user (Ctrl+C).";
             this.conversation.addToolResult(tc.id, abortMsg);
-            printWarning("Remaining tool calls skipped.");
+            printWarning(t("repl.remaining_skipped"));
             break;
           }
 
@@ -916,7 +919,7 @@ export class MercuryRepl {
           try {
             args = JSON.parse(tc.function.arguments);
           } catch {
-            printError(`Bad JSON arguments for tool "${fnName}"`);
+            printError(`${t("repl.bad_json")} "${fnName}"`);
             const errMsg = "Error: Invalid JSON in tool arguments.";
             this.conversation.addToolResult(tc.id, errMsg);
             await this.log.append({ role: "tool", name: fnName, result: errMsg });
@@ -983,9 +986,9 @@ export class MercuryRepl {
       const usedTokens = this.conversation.getTokenEstimate();
       const contextPct = usedTokens / MODEL_LIMITS.max_context_tokens;
       if (contextPct > 0.9) {
-        printWarning("Context usage above 90%. Consider /clear or /supercompress to free space.");
+        printWarning(t("repl.context_above_90"));
       } else if (contextPct > 0.75) {
-        printWarning("Context usage above 75%. Compression may trigger soon.");
+        printWarning(t("repl.context_above_75"));
       }
       printResponseFooter({
         usedTokens,
@@ -1000,7 +1003,7 @@ export class MercuryRepl {
   async _enterRollbackMode() {
     const checkpoints = this.rollback.getCheckpoints();
     if (checkpoints.length === 0) {
-      printInfo("No checkpoints available.");
+      printInfo(t("repl.no_checkpoints"));
       return;
     }
 
@@ -1040,17 +1043,17 @@ export class MercuryRepl {
             if (result.restored) {
               this.conversation.messages = result.messages;
               printSuccess(`Full rollback to checkpoint ${cpIndex + 1}.`);
-            } else printError("Rollback failed.");
+            } else printError(t("repl.rollback_failed"));
           } else if (option === 1) {
             const result = this.rollback.contextRollback(cpIndex);
             if (result.restored) {
               this.conversation.messages = result.messages;
               printSuccess(`Context restored to checkpoint ${cpIndex + 1}.`);
-            } else printError("Context restore failed.");
+            } else printError(t("repl.context_restore_failed"));
           }
           // option === 2 is Cancel — do nothing
         } catch (err) {
-          printError(`Rollback error: ${err.message}`);
+          printError(`${t("repl.rollback_error")} ${err.message}`);
         }
       };
 
@@ -1058,7 +1061,7 @@ export class MercuryRepl {
         process.stdin.removeListener("keypress", onKey);
         this._inRollbackMode = false;
         process.stdout.write("\x1b[2J\x1b[H");
-        printInfo("Exited rollback mode.");
+        printInfo(t("repl.exited_rollback"));
         this._rl.setPrompt(this._buildPrompt());
     this._rl.prompt();
         resolve();
@@ -1083,22 +1086,22 @@ export class MercuryRepl {
         this.conversation.clear();
         await this.log.clear();
         this.rollback.checkpoints = [];
-        printInfo("Conversation cleared.");
+        printInfo(t("repl.conversation_cleared"));
         break;
 
       case "/config":
-        printInfo("Current config:");
+        printInfo(t("repl.current_config"));
         console.log(JSON.stringify(this.client.config, null, 2));
         break;
 
       case "/reasoning": {
         const level = parts[1]?.toLowerCase();
         if (!level) {
-          printInfo(`Reasoning: ${this.client.config.reasoning_effort}`);
+          printInfo(`${t("repl.reasoning")} ${this.client.config.reasoning_effort}`);
           break;
         }
         if (!REASONING_LEVELS.includes(level)) {
-          printError(`Invalid. Options: ${REASONING_LEVELS.join(", ")}`);
+          printError(`${t("repl.invalid_options")} ${REASONING_LEVELS.join(", ")}`);
           break;
         }
         this.client.config.reasoning_effort = level;
@@ -1108,20 +1111,20 @@ export class MercuryRepl {
 
       case "/supercompress":
         this.superCompress = !this.superCompress;
-        printInfo(`Super compress: ${this.superCompress ? "ON" : "OFF"}`);
+        printInfo(`${t("repl.super_compress")} ${this.superCompress ? "ON" : "OFF"}`);
         break;
 
       case "/contextsearch":
         this.contextSearchEnabled = !this.contextSearchEnabled;
-        printInfo(`Context search: ${this.contextSearchEnabled ? "ON" : "OFF"}`);
+        printInfo(`${t("repl.context_search")} ${this.contextSearchEnabled ? "ON" : "OFF"}`);
         break;
 
       case "/trust": {
         const mode = parts[1]?.toLowerCase();
         if (!mode) {
-          printInfo(`Trust: ${this._trustLabel(this.trustMode)}`);
-          printInfo(`Outside workspace: ${this.allowOutsideWorkspace ? "allowed" : "blocked"}`);
-          printInfo("Usage: /trust readonly|approval|open|outside");
+          printInfo(`${t("repl.trust")} ${this._trustLabel(this.trustMode)}`);
+          printInfo(`${t("repl.outside_workspace")} ${this.allowOutsideWorkspace ? t("repl.allowed") : t("repl.blocked")}`);
+          printInfo(t("repl.trust_usage"));
           break;
         }
         if (mode === "readonly" || mode === "1") this.trustMode = TRUST_READONLY;
@@ -1129,10 +1132,10 @@ export class MercuryRepl {
         else if (mode === "open" || mode === "3") this.trustMode = TRUST_OPEN;
         else if (mode === "outside") {
           this.allowOutsideWorkspace = !this.allowOutsideWorkspace;
-          printInfo(`Outside workspace: ${this.allowOutsideWorkspace ? "allowed" : "blocked"}`);
+          printInfo(`${t("repl.outside_workspace")} ${this.allowOutsideWorkspace ? t("repl.allowed") : t("repl.blocked")}`);
           break;
         } else {
-          printError(`Unknown mode: ${mode}`);
+          printError(`${t("repl.unknown_mode")} ${mode}`);
           break;
         }
         // Update ToolExecutor and rebuild system prompt
@@ -1145,7 +1148,7 @@ export class MercuryRepl {
       case "/workspace": {
         const newWs = parts.slice(1).join(" ").trim();
         if (!newWs) {
-          printInfo(`Workspace: ${this.workspace}`);
+          printInfo(`${t("repl.workspace")} ${this.workspace}`);
           break;
         }
         this.workspace = path.resolve(newWs);
@@ -1156,7 +1159,7 @@ export class MercuryRepl {
         this.toolExecutor.workspace = this.workspace;
         this.sandbox.workspace = this.workspace;
         this.conversation.updateSystemPrompt(buildSystemPrompt(this.workspace, this.trustMode, this.sandbox));
-        printSuccess(`Workspace: ${this.workspace}`);
+        printSuccess(`${t("repl.workspace")} ${this.workspace}`);
         break;
       }
 
@@ -1205,13 +1208,13 @@ export class MercuryRepl {
         break;
 
       case "/edit": {
-        printInfo(`Opening ${process.env.VISUAL || process.env.EDITOR || "vi"} for multiline input...`);
+        printInfo(`${t("repl.opening_editor")} ${process.env.VISUAL || process.env.EDITOR || "vi"} ${t("repl.for_multiline")}`);
         const editorText = this._openEditor();
         if (!editorText) {
-          printInfo("Editor cancelled (empty input).");
+          printInfo(t("repl.editor_cancelled"));
           break;
         }
-        printInfo(`Received ${editorText.length} chars from editor.`);
+        printInfo(`${t("repl.received_chars")} ${editorText.length} ${t("repl.chars_from_editor")}`);
         // Treat as normal user message
         const expanded = this._resolveFileMentions(editorText);
         this.rollback.createCheckpoint(expanded, this.conversation.messages);
@@ -1221,17 +1224,21 @@ export class MercuryRepl {
         try {
           await this._sendAndProcess();
         } catch (err) {
-          printError(`Error: ${err.message}`);
+          printError(`${t("repl.error")} ${err.message}`);
         }
         break;
       }
+
+      case "/lang":
+        await this._handleLang(parts.slice(1));
+        break;
 
       case "/exit":
         await this._gracefulExit();
         break;
 
       default:
-        printError(`Unknown command: ${cmd}. Type /help for commands.`);
+        printError(`${t("repl.unknown_command")} ${cmd}. ${t("repl.type_help")}`);
     }
   }
 
@@ -1251,20 +1258,20 @@ export class MercuryRepl {
         messages: this.conversation.getMessages(),
         config: this.client.config,
       });
-      printSuccess(`Saved: ${filepath}`);
+      printSuccess(`${t("history.saved")} ${filepath}`);
       return;
     }
     if (subCmd === "restore") {
       const id = args[1];
-      if (!id) { printError("Usage: /history restore <number>"); return; }
+      if (!id) { printError(t("history.restore_usage")); return; }
       const session = await this.history.load(id);
-      if (!session) { printError(`Not found: ${id}`); return; }
+      if (!session) { printError(`${t("history.not_found")} ${id}`); return; }
       this.conversation.messages = session.messages;
       this._sessionId = session.id;
-      printSuccess(`Restored (${session.messageCount} messages)`);
+      printSuccess(`${t("history.restored")} (${session.messageCount} ${t("history.messages")})`);
       return;
     }
-    printError(`Unknown: ${subCmd}. Options: list, save, restore`);
+    printError(`${t("history.unknown")} ${subCmd}. ${t("history.options")}`);
   }
 
   // ── Settings ──────────────────────────────────────────────────────────────
@@ -1275,7 +1282,7 @@ export class MercuryRepl {
       const G = "\x1b[90m", R = "\x1b[0m", C = "\x1b[38;5;87m", B = "\x1b[1m";
       const GR = "\x1b[32m", D = "\x1b[2m";
       console.log("");
-      console.log(`${B}${C}  \u256d\u2500 Settings \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256e${R}`);
+      console.log(`${B}${C}  \u256d\u2500 ${t("settings.title")} \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256e${R}`);
       const sandboxStatus = this.sandbox.getStatus();
       const rows = [
         ["model", this.client.config.model],
@@ -1285,40 +1292,41 @@ export class MercuryRepl {
         ["stream", this.client.config.stream],
         ["diffusing", this.client.config.diffusing],
         ["api_base", this.client.baseURL],
-        ["api_key", this.client.apiKey ? this.client.apiKey.slice(0, 8) + "..." + this.client.apiKey.slice(-4) : "(not set)"],
+        ["api_key", this.client.apiKey ? this.client.apiKey.slice(0, 8) + "..." + this.client.apiKey.slice(-4) : t("settings.not_set")],
         ["workspace", this.workspace],
         ["trust", this.trustMode],
         ["sandbox", `${sandboxStatus.mode} (${sandboxStatus.backend})`],
         ["supercompress", this.superCompress ? "ON" : "OFF"],
         ["contextsearch", this.contextSearchEnabled ? "ON" : "OFF"],
         ["labs", labs.enabled ? "ON" : "OFF"],
+        ["language", getLocale()],
       ];
       for (const [k, v] of rows) {
         console.log(`${G}  \u2502${R}  ${GR}${k.padEnd(15)}${R} ${D}${v}${R}`);
       }
       console.log(`${B}${C}  \u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256f${R}`);
       console.log("");
-      printInfo("Usage: /settings <key> <value>");
+      printInfo(t("settings.usage"));
       console.log("");
       return;
     }
 
     const value = args.slice(1).join(" ");
-    if (!value) { printError(`Usage: /settings ${subCmd} <value>`); return; }
+    if (!value) { printError(`${t("settings.usage_key")} ${subCmd} <value>`); return; }
 
     switch (subCmd) {
       case "model": this.client.config.model = value; break;
       case "reasoning":
-        if (!REASONING_LEVELS.includes(value)) { printError(`Invalid. Options: ${REASONING_LEVELS.join(", ")}`); return; }
+        if (!REASONING_LEVELS.includes(value)) { printError(`${t("repl.invalid_options")} ${REASONING_LEVELS.join(", ")}`); return; }
         this.client.config.reasoning_effort = value; break;
       case "temperature": {
-        const t = parseFloat(value);
-        if (isNaN(t) || t < 0 || t > 2) { printError("Must be 0-2."); return; }
-        this.client.config.temperature = t; break;
+        const tv = parseFloat(value);
+        if (isNaN(tv) || tv < 0 || tv > 2) { printError(t("settings.must_be_0_2")); return; }
+        this.client.config.temperature = tv; break;
       }
       case "max_tokens": {
         const n = parseInt(value, 10);
-        if (isNaN(n) || n < 1 || n > 50000) { printError("Must be 1-50000."); return; }
+        if (isNaN(n) || n < 1 || n > 50000) { printError(t("settings.must_be_1_50000")); return; }
         this.client.config.max_tokens = n; break;
       }
       case "stream": this.client.config.stream = value === "true" || value === "on"; break;
@@ -1333,11 +1341,15 @@ export class MercuryRepl {
         break;
       case "supercompress": this.superCompress = value === "true" || value === "on"; break;
       case "contextsearch": this.contextSearchEnabled = value === "true" || value === "on"; break;
+      case "language":
+      case "lang":
+        if (!setLocale(value)) { printError(`${t("lang.invalid")} ${getSupportedLocales().join(", ")}`); return; }
+        break;
       default:
-        printError(`Unknown setting: ${subCmd}`);
+        printError(`${t("settings.unknown_setting")} ${subCmd}`);
         return;
     }
-    printSuccess(`${subCmd} updated.`);
+    printSuccess(`${subCmd} ${t("settings.updated")}`);
   }
 
   // ── Sandbox management ──────────────────────────────────────────────
@@ -1352,20 +1364,20 @@ export class MercuryRepl {
 
       const status = this.sandbox.getStatus();
       console.log("");
-      console.log(`${B}${C}  ╭─ Sandbox ─────────────────────────────────────────────╮${R}`);
+      console.log(`${B}${C}  ╭─ ${t("sandbox.title")} ─────────────────────────────────────────────╮${R}`);
       const rows = [
         ["mode", status.mode],
         ["backend", status.backend],
-        ["sub-agents", this.sandbox.sandboxSubAgents ? "sandboxed" : "unsandboxed"],
-        ["network", this.sandbox.allowNetwork ? "allowed" : "blocked"],
-        ["domains", this.sandbox.allowedDomains.length > 0 ? this.sandbox.allowedDomains.join(", ") : "(all)"],
+        ["sub-agents", this.sandbox.sandboxSubAgents ? t("sandbox.sandboxed") : t("sandbox.unsandboxed")],
+        ["network", this.sandbox.allowNetwork ? t("repl.allowed") : t("repl.blocked")],
+        ["domains", this.sandbox.allowedDomains.length > 0 ? this.sandbox.allowedDomains.join(", ") : t("sandbox.all_domains")],
       ];
       for (const [k, v] of rows) {
         console.log(`${G}  │${R}  ${GR}${k.padEnd(15)}${R} ${D}${v}${R}`);
       }
       console.log(`${B}${C}  ╰─────────────────────────────────────────────────────────╯${R}`);
       console.log("");
-      printInfo("Usage: /sandbox on|off|strict|subagents|network");
+      printInfo(t("sandbox.usage"));
       console.log("");
       return;
     }
@@ -1374,37 +1386,37 @@ export class MercuryRepl {
     if (subCmd === "on" || subCmd === "1") {
       this.sandbox.mode = SANDBOX_ON;
       this.toolExecutor.sandbox = this.sandbox;
-      printSuccess("Sandbox: ON (workspace-scoped, resource limits)");
+      printSuccess(t("sandbox.on_msg"));
       return;
     }
     if (subCmd === "strict" || subCmd === "2") {
       this.sandbox.mode = SANDBOX_STRICT;
       this.toolExecutor.sandbox = this.sandbox;
-      printSuccess("Sandbox: STRICT (read-only root, network restricted)");
+      printSuccess(t("sandbox.strict_msg"));
       return;
     }
     if (subCmd === "off" || subCmd === "3") {
       this.sandbox.mode = SANDBOX_OFF;
       this.toolExecutor.sandbox = this.sandbox;
-      printWarning("Sandbox: OFF — no isolation active");
+      printWarning(t("sandbox.off_msg"));
       return;
     }
 
     // Toggle sub-agent sandboxing
     if (subCmd === "subagents") {
       this.sandbox.sandboxSubAgents = !this.sandbox.sandboxSubAgents;
-      printInfo(`Sub-agent sandbox: ${this.sandbox.sandboxSubAgents ? "ON" : "OFF"}`);
+      printInfo(`${t("sandbox.subagent_sandbox")} ${this.sandbox.sandboxSubAgents ? "ON" : "OFF"}`);
       return;
     }
 
     // Toggle network access
     if (subCmd === "network") {
       this.sandbox.allowNetwork = !this.sandbox.allowNetwork;
-      printInfo(`Sandbox network: ${this.sandbox.allowNetwork ? "allowed" : "blocked"}`);
+      printInfo(`${t("sandbox.network")} ${this.sandbox.allowNetwork ? t("repl.allowed") : t("repl.blocked")}`);
       return;
     }
 
-    printError(`Unknown sandbox option: ${subCmd}. Options: on, off, strict, subagents, network`);
+    printError(`${t("sandbox.unknown_option")} ${subCmd}. ${t("sandbox.options")}`);
   }
 
   // ── Agent management ─────────────────────────────────────────────────────
@@ -1421,22 +1433,22 @@ export class MercuryRepl {
     if (subCmd === "create" || subCmd === "new") {
       const name = args[1];
       if (!name) {
-        printError("Usage: /agents create <name>");
+        printError(t("agents.create_usage"));
         return;
       }
       try {
         const filePath = await scaffoldAgent(this.workspace, name);
-        printSuccess(`Created agent: ${filePath}`);
-        printInfo("Edit the file to customize the agent's system prompt and tools.");
+        printSuccess(`${t("agents.created")} ${filePath}`);
+        printInfo(t("agents.edit_hint"));
         // Clear agent cache
         this.toolExecutor._agents = null;
       } catch (err) {
-        printError(`Error creating agent: ${err.message}`);
+        printError(`${t("agents.create_error")} ${err.message}`);
       }
       return;
     }
 
-    printError(`Unknown /agents option: ${subCmd}. Options: list, create <name>`);
+    printError(`${t("agents.unknown_option")} ${subCmd}. ${t("agents.options")}`);
   }
 
   // ── /labs command ────────────────────────────────────────────────────────
@@ -1450,8 +1462,8 @@ export class MercuryRepl {
     // /labs — show all features
     if (!subCmd) {
       console.log("");
-      console.log(`${B}${C}  ╭─ Labs (Experimental Features) ${"─".repeat(28)}╮${R}`);
-      console.log(`${G}  │${R}  Master switch: ${labs.enabled ? `${GR}${B}ON${R}` : `${RD}OFF${R}`}${D}    (/labs on|off)${R}`);
+      console.log(`${B}${C}  ╭─ ${t("labs.title")} ${"─".repeat(28)}╮${R}`);
+      console.log(`${G}  │${R}  ${t("labs.master_switch")} ${labs.enabled ? `${GR}${B}ON${R}` : `${RD}OFF${R}`}${D}    (/labs on|off)${R}`);
       console.log(`${G}  │${R}`);
 
       const snapshot = labs.snapshot();
@@ -1462,14 +1474,14 @@ export class MercuryRepl {
           console.log(`${G}  │${R}  ${B}${C}${feat.category}${R}`);
         }
         const statusIcon = feat.active ? `${GR}●${R}` : feat.enabled ? `${YL}○${R}` : `${RD}○${R}`;
-        const statusText = feat.active ? `${GR}active${R}` : feat.blocked ? `${D}${feat.blocked}${R}` : `${RD}off${R}`;
+        const statusText = feat.active ? `${GR}${t("labs.active")}${R}` : feat.blocked ? `${D}${feat.blocked}${R}` : `${RD}${t("labs.off_status")}${R}`;
         const tools = feat.tools.length > 0 ? `${D} [${feat.tools.join(", ")}]${R}` : "";
         console.log(`${G}  │${R}   ${statusIcon} ${feat.name.padEnd(28)} ${statusText}${tools}`);
         console.log(`${G}  │${R}     ${D}${feat.desc}${R}`);
       }
       console.log(`${G}  │${R}`);
-      console.log(`${G}  │${R}  ${D}Toggle: /labs <feature-id> [on|off]${R}`);
-      console.log(`${G}  │${R}  ${D}IDs: ${snapshot.map((f) => f.id).join(", ")}${R}`);
+      console.log(`${G}  │${R}  ${D}${t("labs.toggle_hint")}${R}`);
+      console.log(`${G}  │${R}  ${D}${t("labs.ids_label")} ${snapshot.map((f) => f.id).join(", ")}${R}`);
       console.log(`${B}${C}  ╰${"─".repeat(55)}╯${R}`);
       console.log("");
       return;
@@ -1478,14 +1490,14 @@ export class MercuryRepl {
     // /labs on — enable master switch
     if (subCmd === "on") {
       labs.enableLabs();
-      printSuccess("Labs mode: ON — experimental features available");
+      printSuccess(t("labs.on"));
       return;
     }
 
     // /labs off — disable master switch
     if (subCmd === "off") {
       labs.disableLabs();
-      printInfo("Labs mode: OFF — all experimental features disabled");
+      printInfo(t("labs.off"));
       return;
     }
 
@@ -1497,13 +1509,13 @@ export class MercuryRepl {
     const result = labs.toggle(featureId, explicitValue);
     if (result.ok) {
       if (!labs.enabled) {
-        printWarning("Note: Labs master switch is OFF. Enable with /labs on");
+        printWarning(t("labs.master_off_note"));
       }
       printSuccess(result.message);
     } else {
       printError(result.message);
       const features = labs.getFeatures();
-      printInfo(`Available IDs: ${features.map((f) => f.id).join(", ")}`);
+      printInfo(`${t("labs.available_ids")} ${features.map((f) => f.id).join(", ")}`);
     }
   }
 
@@ -1512,15 +1524,15 @@ export class MercuryRepl {
   async _handleInit() {
     const existing = await findProjectConfig(this.workspace);
     if (existing) {
-      printInfo(`Project config already exists: ${existing}`);
+      printInfo(`${t("init.already_exists")} ${existing}`);
       return;
     }
     try {
       const filePath = await scaffoldProjectConfig(this.workspace);
-      printSuccess(`Created project config: ${filePath}`);
-      printInfo("Edit this file to add project-specific instructions for Mercury Code.");
+      printSuccess(`${t("init.created")} ${filePath}`);
+      printInfo(t("init.edit_hint"));
     } catch (err) {
-      printError(`Error creating config: ${err.message}`);
+      printError(`${t("init.error")} ${err.message}`);
     }
   }
 
@@ -1536,26 +1548,26 @@ export class MercuryRepl {
         maxBuffer: 5 * 1024 * 1024,
       });
       if (!result.trim() || result.trim() === "---UNTRACKED---") {
-        printInfo("No changes detected.");
+        printInfo(t("diff.no_changes"));
       } else {
         console.log(result);
       }
     } catch (err) {
-      printError(`Git diff error: ${err.stderr || err.message}`);
+      printError(`${t("diff.error")} ${err.stderr || err.message}`);
     }
   }
 
   // ── /compact command ────────────────────────────────────────────────────
 
   async _handleCompact() {
-    printInfo("Compacting conversation...");
+    printInfo(t("compact.compacting"));
     const before = this.conversation.messages.length;
     try {
       await this.conversation.compressIfNeeded(this.client, this.memory, 0.5);
       const after = this.conversation.messages.length;
-      printSuccess(`Compacted: ${before} messages → ${after} messages`);
+      printSuccess(`${t("compact.done")} ${before} ${t("compact.messages")} → ${after} ${t("compact.messages")}`);
     } catch (err) {
-      printError(`Compact error: ${err.message}`);
+      printError(`${t("compact.error")} ${err.message}`);
     }
   }
 
@@ -1571,7 +1583,7 @@ export class MercuryRepl {
           messages: this.conversation.getMessages(),
           config: this.client.config,
         });
-        printInfo("Current session saved.");
+        printInfo(t("new.session_saved"));
       } catch { /* non-critical */ }
     }
 
@@ -1580,7 +1592,7 @@ export class MercuryRepl {
     this.conversation = new Conversation(buildSystemPrompt(this.workspace, this.trustMode, this.sandbox));
     this.rollback = new RollbackManager(this.workspace);
     this._toolTurnCount = 0;
-    printSuccess("Started new conversation. Previous session saved.");
+    printSuccess(t("new.started"));
   }
 
   // ── /copy command ───────────────────────────────────────────────────────
@@ -1590,7 +1602,7 @@ export class MercuryRepl {
     const msgs = this.conversation.messages;
     const last = [...msgs].reverse().find((m) => m.role === "assistant" && m.content);
     if (!last) {
-      printError("No assistant message to copy.");
+      printError(t("copy.no_message"));
       return;
     }
 
@@ -1598,11 +1610,28 @@ export class MercuryRepl {
     try {
       const clip = process.platform === "darwin" ? "pbcopy" : "xclip -selection clipboard";
       _execSync(clip, { input: last.content, timeout: 5000 });
-      printSuccess(`Copied ${last.content.length} chars to clipboard.`);
+      printSuccess(`${t("copy.copied")} ${last.content.length} ${t("copy.chars_to_clipboard")}`);
     } catch {
       // Fallback: print it
-      printInfo("Clipboard not available. Last assistant response:");
+      printInfo(t("copy.not_available"));
       console.log(last.content);
+    }
+  }
+
+  // ── /lang command ───────────────────────────────────────────────────────
+
+  async _handleLang(args) {
+    const langArg = args[0]?.toLowerCase();
+    if (!langArg) {
+      printInfo(`${t("lang.current")} ${getLocale()} (${getSupportedLocales().join(", ")})`);
+      return;
+    }
+    if (setLocale(langArg)) {
+      // Rebuild system prompt with new locale context
+      this.conversation.updateSystemPrompt(buildSystemPrompt(this.workspace, this.trustMode, this.sandbox));
+      printSuccess(`${t("lang.changed")} ${getLocale()}`);
+    } else {
+      printError(`${t("lang.invalid")} ${getSupportedLocales().join(", ")}`);
     }
   }
 
@@ -1624,22 +1653,22 @@ export class MercuryRepl {
 
     // Source indicator: heuristic or API-based
     const hasApiUsage = this.conversation._lastActualUsage?.prompt_tokens;
-    const sourceLabel = hasApiUsage ? `${GR}API-reported${R}` : `${Y}estimated (bytes/4)${R}`;
+    const sourceLabel = hasApiUsage ? `${GR}${t("context.api_reported")}${R}` : `${Y}${t("context.estimated")}${R}`;
 
     console.log("");
-    console.log(`${B}${C}  ╭─ Context Usage ─────────────────────────────────────╮${R}`);
+    console.log(`${B}${C}  ╭─ ${t("context.title")} ─────────────────────────────────────╮${R}`);
     console.log(`${G}  │${R}`);
 
     // Circular gauge + progress bar
     const bar = `${barColor}${"━".repeat(filled)}${G}${"━".repeat(empty)}${R}`;
     console.log(`${G}  │${R}  ${barColor}${B}${gaugeChar}${R} ${bar} ${barColor}${B}${pct}%${R}`);
-    console.log(`${G}  │${R}  ${D}${used.toLocaleString()} / ${max.toLocaleString()} tokens${R}  ${D}(${sourceLabel})${R}`);
+    console.log(`${G}  │${R}  ${D}${used.toLocaleString()} / ${max.toLocaleString()} ${t("tool.tokens")}${R}  ${D}(${sourceLabel})${R}`);
     console.log(`${G}  │${R}`);
-    console.log(`${G}  │${R}  ${GR}Messages${R}     ${D}${this.conversation.messages.length}${R}`);
-    console.log(`${G}  │${R}  ${GR}Checkpoints${R}  ${D}${this.rollback.count}${R}`);
-    console.log(`${G}  │${R}  ${GR}Session${R}      ${D}${this._sessionId}${R}`);
-    console.log(`${G}  │${R}  ${GR}Compression${R}  ${D}${this.superCompress ? "Super (50%)" : "Normal (80%)"}${R}`);
-    console.log(`${G}  │${R}  ${GR}Estimation${R}   ${D}Codex-style (bytes÷4 + API usage)${R}`);
+    console.log(`${G}  │${R}  ${GR}${t("context.messages")}${R}     ${D}${this.conversation.messages.length}${R}`);
+    console.log(`${G}  │${R}  ${GR}${t("context.checkpoints")}${R}  ${D}${this.rollback.count}${R}`);
+    console.log(`${G}  │${R}  ${GR}${t("context.session")}${R}      ${D}${this._sessionId}${R}`);
+    console.log(`${G}  │${R}  ${GR}${t("context.compression")}${R}  ${D}${this.superCompress ? t("context.super") : t("context.normal")}${R}`);
+    console.log(`${G}  │${R}  ${GR}${t("context.estimation")}${R}   ${D}${t("context.estimation_desc")}${R}`);
     const sbStatus = this.sandbox.getStatus();
     console.log(`${G}  │${R}  ${GR}Sandbox${R}      ${D}${sbStatus.label}${R}`);
     console.log(`${G}  │${R}`);
@@ -1658,10 +1687,10 @@ export class MercuryRepl {
           messages: this.conversation.getMessages(),
           config: this.client.config,
         });
-        printInfo("Session auto-saved.");
+        printInfo(t("exit.auto_saved"));
       } catch { /* non-critical */ }
     }
-    printInfo("Goodbye!");
+    printInfo(t("exit.goodbye"));
     process.exit(0);
   }
 

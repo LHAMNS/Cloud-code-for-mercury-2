@@ -2,6 +2,8 @@
 // Shows running sub-agents as navigable tabs below terminal output.
 // Navigation: ↓ focus bar, ←/→ switch agent, Enter open/close, ↑/Esc exit.
 
+import { t } from "../i18n.js";
+
 const ESC = "\x1b[";
 const RESET = `${ESC}0m`;
 const BOLD = `${ESC}1m`;
@@ -51,7 +53,7 @@ export class AgentTabBar {
     const agent = {
       task: typeof task === "string" ? task : task.task,
       status: "waiting",    // waiting | thinking | tool | compress | done | error
-      statusText: "Initializing...",
+      statusText: t("status.initializing"),
       activity: [],          // recent action log (last 8 entries)
       open: false,           // whether detail panel is expanded
       done: false,
@@ -129,22 +131,22 @@ export class AgentTabBar {
       case "thinking":
         agent.status = "thinking";
         agent.turns++;
-        agent.statusText = `Thinking... (Turn ${agent.turns})`;
+        agent.statusText = `${t("status.thinking")} (Turn ${agent.turns})`;
         break;
       case "tool_call":
         agent.status = "tool";
         agent.toolCount++;
-        agent.statusText = detail || "Running tool...";
+        agent.statusText = detail || t("status.executing_tool");
         agent.activity.push(`├─ ${detail || "tool"}`);
         if (agent.activity.length > 8) agent.activity.shift();
         break;
       case "tool_result":
-        agent.statusText = detail || "Processing...";
+        agent.statusText = detail || t("status.processing_result");
         break;
       case "compressing":
         agent.status = "compress";
-        agent.statusText = "Compressing context...";
-        agent.activity.push("├─ 🗜 Context compression");
+        agent.statusText = t("status.compressing_context");
+        agent.activity.push(`├─ 🗜 ${t("status.compressing_context")}`);
         if (agent.activity.length > 8) agent.activity.shift();
         break;
     }
@@ -163,12 +165,12 @@ export class AgentTabBar {
     agent.success = success;
     const elapsed = ((Date.now() - agent.startTime) / 1000).toFixed(1);
     agent.statusText = success
-      ? `Done (${agent.turns} turns, ${agent.toolCount} tools, ${elapsed}s)`
-      : `Error (${elapsed}s)`;
+      ? `${t("status.done")} (${agent.turns} ${t("status.turns")}, ${agent.toolCount} ${t("agent.tools_label").replace(":", "")}, ${elapsed}s)`
+      : `${t("status.error")} (${elapsed}s)`;
     agent.activity.push(
       success
-        ? `└─ ${GREEN}✓${RESET} Completed in ${elapsed}s`
-        : `└─ ${RED}✗${RESET} ${(summary || "Failed").slice(0, 60)}`
+        ? `└─ ${GREEN}✓${RESET} ${t("status.done")} ${elapsed}s`
+        : `└─ ${RED}✗${RESET} ${(summary || t("status.error")).slice(0, 60)}`
     );
   }
 
@@ -209,9 +211,9 @@ export class AgentTabBar {
 
     // Hint line (only when not focused)
     if (!this.focused && !this.allDone) {
-      lines.push(`${GRAY}  Press ↓ to navigate agents${RESET}`);
+      lines.push(`${GRAY}  ${t("agent.navigate_hint")}${RESET}`);
     } else if (this.focused) {
-      lines.push(`${fg256(87)}  ←/→ switch  Enter open/close  ↑/Esc exit${RESET}`);
+      lines.push(`${fg256(87)}  ${t("agent.nav_keys")}${RESET}`);
     }
 
     // Tab bar line
@@ -230,8 +232,8 @@ export class AgentTabBar {
   _renderTabLine() {
     const tabs = this.agents.map((_, i) => this._renderTab(i));
     const label = this.focused
-      ? `${fg256(87)}${BOLD}  Agents${RESET} `
-      : `${GRAY}  Agents${RESET} `;
+      ? `${fg256(87)}${BOLD}  ${t("agent.agents")}${RESET} `
+      : `${GRAY}  ${t("agent.agents")}${RESET} `;
     return label + tabs.join(" ");
   }
 
@@ -280,7 +282,7 @@ export class AgentTabBar {
       ? agent.task.slice(0, inner - 17) + "..."
       : agent.task;
     const pad = Math.max(0, inner - title.length - 10);
-    lines.push(`${bc}  ╭─ Agent ${index + 1}: ${BOLD}${title}${RESET}${bc} ${"─".repeat(pad)}╮${RESET}`);
+    lines.push(`${bc}  ╭─ ${t("agent.panel_title")} ${index + 1}: ${BOLD}${title}${RESET}${bc} ${"─".repeat(pad)}╮${RESET}`);
 
     // Status + elapsed
     const elapsed = ((Date.now() - agent.startTime) / 1000).toFixed(1);
@@ -290,7 +292,7 @@ export class AgentTabBar {
     lines.push(`${bc}  │${RESET} ${statusIcon} ${agent.statusText} ${GRAY}(${elapsed}s)${RESET}`);
 
     // Stats line
-    lines.push(`${bc}  │${RESET} ${DIM}Turns: ${agent.turns}  Tools: ${agent.toolCount}${RESET}`);
+    lines.push(`${bc}  │${RESET} ${DIM}${t("agent.turns_label")} ${agent.turns}  ${t("agent.tools_label")} ${agent.toolCount}${RESET}`);
 
     // Activity log
     const recentActivity = agent.activity.slice(-5);
@@ -335,7 +337,7 @@ export class AgentTabBar {
    */
   printSummary() {
     console.log("");
-    const header = `${fg256(75)}  ┌─ ${BOLD}Sub-Agent Results${RESET}${fg256(75)} ${"─".repeat(Math.min(termWidth() - 28, 50))}${RESET}`;
+    const header = `${fg256(75)}  ┌─ ${BOLD}${t("agent.results_title")}${RESET}${fg256(75)} ${"─".repeat(Math.min(termWidth() - 28, 50))}${RESET}`;
     console.log(header);
 
     for (let i = 0; i < this.agents.length; i++) {

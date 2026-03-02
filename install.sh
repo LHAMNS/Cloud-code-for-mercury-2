@@ -203,10 +203,12 @@ verify_installation() {
         return 1
     fi
 
-    # 也检查 mercury 快捷命令
-    if command -v mercury &> /dev/null; then
-        ok "mercury 快捷命令也已可用。"
-    fi
+    # 检查所有大小写变体命令
+    for alias_cmd in mercury Mercury MERCURY mercury-code Mercury-Code; do
+        if command -v "${alias_cmd}" &> /dev/null; then
+            ok "${alias_cmd} 命令已可用。"
+        fi
+    done
 
     # 打印版本
     local version
@@ -231,9 +233,9 @@ print_getting_started() {
     echo ""
     echo -e "     提示: 将上面这行添加到 ~/.bashrc 或 ~/.zshrc 中以永久生效。"
     echo ""
-    echo -e "  ${YELLOW}2.${RESET} 启动交互式会话:"
+    echo -e "  ${YELLOW}2.${RESET} 启动交互式会话（大小写均可）:"
     echo ""
-    echo -e "     ${GREEN}mercury-code${RESET}"
+    echo -e "     ${GREEN}mercury${RESET}    或    ${GREEN}Mercury${RESET}    或    ${GREEN}MERCURY${RESET}"
     echo ""
     echo -e "  ${YELLOW}3.${RESET} 或使用单次提问模式:"
     echo ""

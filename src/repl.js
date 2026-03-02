@@ -1257,6 +1257,63 @@ export class MercuryRepl {
         break;
       }
 
+      case "/cost":
+        this._handleCost();
+        break;
+
+      case "/doctor":
+        await this._handleDoctor();
+        break;
+
+      case "/bug":
+        printInfo("Report bugs at: https://github.com/LHAMNS/Cloud-code-for-mercury-2/issues");
+        printInfo("Include your Mercury Code version, Node.js version, and OS.");
+        break;
+
+      case "/status":
+        this._handleStatus();
+        break;
+
+      case "/memory": {
+        const memArg = parts[1]?.toLowerCase();
+        await this._handleMemory(memArg, parts.slice(2).join(" "));
+        break;
+      }
+
+      case "/model": {
+        const modelArg = parts.slice(1).join(" ").trim();
+        if (!modelArg) {
+          printInfo(`Model: ${this.client.config.model}`);
+        } else {
+          this.client.config.model = modelArg;
+          printSuccess(`Model: ${modelArg}`);
+        }
+        break;
+      }
+
+      case "/undo":
+        await this._handleUndo();
+        break;
+
+      case "/login": {
+        const key = parts.slice(1).join(" ").trim();
+        if (!key) {
+          printInfo("Usage: /login <api-key>");
+          printInfo("Or set INCEPTION_API_KEY environment variable.");
+        } else {
+          this.client.apiKey = key;
+          this.toolExecutor._clientOptions.apiKey = key;
+          printSuccess("API key set. Use /settings to verify.");
+        }
+        break;
+      }
+
+      case "/logout":
+        this.client.apiKey = null;
+        this.toolExecutor._clientOptions.apiKey = null;
+        printInfo("API key cleared. Set again with /login or INCEPTION_API_KEY env var.");
+        break;
+
       case "/exit":
         await this._gracefulExit();
         break;
@@ -1676,6 +1733,206 @@ export class MercuryRepl {
     console.log(`${G}  │${R}`);
     console.log(`${B}${C}  ╰──────────────────────────────────────────────────────╯${R}`);
     console.log("");
+  }
+
+  // ── /cost command ────────────────────────────────────────────────────────
+
+  _handleCost() {
+    const E = "\x1b[", R = `${E}0m`, B = `${E}1m`, D = `${E}2m`;
+    const C = `${E}38;5;87m`, G = `${E}90m`, GR = `${E}32m`;
+
+    const used = this.conversation.getTokenEstimate();
+    const hasApi = this.conversation._lastActualUsage;
+    const promptTokens = hasApi?.prompt_tokens || used;
+    const completionTokens = hasApi?.completion_tokens || 0;
+    const totalTokens = hasApi?.total_tokens || used;
+
+    // Mercury-2 pricing estimate (placeholder — update with actual pricing)
+    const inputCostPer1K = 0.003;  // $/1K input tokens
+    const outputCostPer1K = 0.015; // $/1K output tokens
+    const inputCost = (promptTokens / 1000) * inputCostPer1K;
+    const outputCost = (completionTokens / 1000) * outputCostPer1K;
+    const totalCost = inputCost + outputCost;
+
+    console.log("");
+    console.log(`${B}${C}  ╭─ Cost Estimate ──────────────────────────────────────╮${R}`);
+    console.log(`${G}  │${R}  ${GR}Input tokens${R}      ${D}${promptTokens.toLocaleString()}${R}`);
+    console.log(`${G}  │${R}  ${GR}Output tokens${R}     ${D}${completionTokens.toLocaleString()}${R}`);
+    console.log(`${G}  │${R}  ${GR}Total tokens${R}      ${D}${totalTokens.toLocaleString()}${R}`);
+    console.log(`${G}  │${R}`);
+    console.log(`${G}  │${R}  ${GR}Input cost${R}        ${D}$${inputCost.toFixed(4)}${R}`);
+    console.log(`${G}  │${R}  ${GR}Output cost${R}       ${D}$${outputCost.toFixed(4)}${R}`);
+    console.log(`${G}  │${R}  ${GR}Session total${R}     ${B}$${totalCost.toFixed(4)}${R}`);
+    console.log(`${G}  │${R}`);
+    console.log(`${G}  │${R}  ${D}Note: Estimates based on Mercury-2 pricing. Actual${R}`);
+    console.log(`${G}  │${R}  ${D}costs may vary. Check api.inceptionlabs.ai for details.${R}`);
+    console.log(`${B}${C}  ╰──────────────────────────────────────────────────────╯${R}`);
+    console.log("");
+  }
+
+  // ── /doctor command ────────────────────────────────────────────────────
+
+  async _handleDoctor() {
+    const E = "\x1b[", R = `${E}0m`, B = `${E}1m`, D = `${E}2m`;
+    const C = `${E}38;5;87m`, G = `${E}90m`, GR = `${E}32m`, RD = `${E}31m`, Y = `${E}33m`;
+
+    console.log("");
+    console.log(`${B}${C}  ╭─ Doctor ─────────────────────────────────────────────╮${R}`);
+
+    const checks = [];
+
+    // Node.js version
+    const nodeVer = process.version;
+    const nodeMajor = parseInt(nodeVer.replace("v", "").split(".")[0]);
+    checks.push({
+      name: "Node.js",
+      ok: nodeMajor >= 18,
+      detail: `${nodeVer} ${nodeMajor >= 18 ? "(OK)" : "(need >= 18.17.0)"}`,
+    });
+
+    // API key
+    const hasKey = !!(this.client.apiKey && this.client.apiKey.length > 0);
+    checks.push({
+      name: "API Key",
+      ok: hasKey,
+      detail: hasKey ? `Set (${this.client.apiKey.slice(0, 8)}...)` : "NOT SET — use /login or INCEPTION_API_KEY",
+    });
+
+    // Git
+    let gitOk = false;
+    try { _execSync("git --version", { timeout: 5000, encoding: "utf-8" }); gitOk = true; } catch {}
+    checks.push({ name: "Git", ok: gitOk, detail: gitOk ? "Available" : "Not found" });
+
+    // Workspace
+    const wsExists = fs.existsSync(this.workspace);
+    checks.push({ name: "Workspace", ok: wsExists, detail: wsExists ? this.workspace : "Not found" });
+
+    // Config files
+    const configExists = await findProjectConfig(this.workspace);
+    checks.push({
+      name: "Project config",
+      ok: !!configExists,
+      detail: configExists || "No MERCURY.md found (use /init to create)",
+    });
+
+    // Memory file
+    const memPath = path.join(this.workspace, ".mercury", "memory.md");
+    const memExists = fs.existsSync(memPath);
+    checks.push({ name: "Memory file", ok: memExists, detail: memExists ? memPath : "Not created yet" });
+
+    // Sandbox
+    const sbStatus = this.sandbox.getStatus();
+    checks.push({ name: "Sandbox", ok: true, detail: sbStatus.label });
+
+    for (const c of checks) {
+      const icon = c.ok ? `${GR}✓${R}` : `${RD}✗${R}`;
+      console.log(`${G}  │${R}  ${icon} ${c.name.padEnd(16)} ${D}${c.detail}${R}`);
+    }
+
+    const allOk = checks.every((c) => c.ok);
+    console.log(`${G}  │${R}`);
+    if (allOk) {
+      console.log(`${G}  │${R}  ${GR}${B}All checks passed!${R}`);
+    } else {
+      console.log(`${G}  │${R}  ${Y}Some issues detected. Fix the items marked ✗.${R}`);
+    }
+    console.log(`${B}${C}  ╰──────────────────────────────────────────────────────╯${R}`);
+    console.log("");
+  }
+
+  // ── /status command ────────────────────────────────────────────────────
+
+  _handleStatus() {
+    const E = "\x1b[", R = `${E}0m`, B = `${E}1m`, D = `${E}2m`;
+    const C = `${E}38;5;87m`, G = `${E}90m`, GR = `${E}32m`;
+
+    const used = this.conversation.getTokenEstimate();
+    const max = MODEL_LIMITS.max_context_tokens;
+    const pct = Math.round((used / max) * 100);
+
+    console.log("");
+    console.log(`${B}${C}  ╭─ Status ─────────────────────────────────────────────╮${R}`);
+    console.log(`${G}  │${R}  ${GR}Session${R}        ${D}${this._sessionId}${R}`);
+    console.log(`${G}  │${R}  ${GR}Model${R}          ${D}${this.client.config.model}${R}`);
+    console.log(`${G}  │${R}  ${GR}Reasoning${R}      ${D}${this.client.config.reasoning_effort}${R}`);
+    console.log(`${G}  │${R}  ${GR}Trust${R}          ${D}${this._trustLabel(this.trustMode)}${R}`);
+    console.log(`${G}  │${R}  ${GR}Workspace${R}      ${D}${this.workspace}${R}`);
+    console.log(`${G}  │${R}  ${GR}Context${R}        ${D}${pct}% (${used.toLocaleString()} / ${max.toLocaleString()} tokens)${R}`);
+    console.log(`${G}  │${R}  ${GR}Messages${R}       ${D}${this.conversation.messages.length}${R}`);
+    console.log(`${G}  │${R}  ${GR}API Key${R}        ${D}${this.client.apiKey ? "Set" : "NOT SET"}${R}`);
+    console.log(`${G}  │${R}  ${GR}Labs${R}           ${D}${labs.enabled ? "ON" : "OFF"}${R}`);
+    console.log(`${B}${C}  ╰──────────────────────────────────────────────────────╯${R}`);
+    console.log("");
+  }
+
+  // ── /memory command ────────────────────────────────────────────────────
+
+  async _handleMemory(subCmd, value) {
+    const memPath = path.join(this.workspace, ".mercury", "memory.md");
+
+    if (!subCmd || subCmd === "show") {
+      try {
+        const content = fs.readFileSync(memPath, "utf-8");
+        printInfo(`Memory file: ${memPath}`);
+        console.log(content.slice(0, 5000));
+        if (content.length > 5000) printInfo(`... (${content.length} chars total)`);
+      } catch {
+        printInfo("No memory file yet. Mercury Code will create one during context compression.");
+      }
+      return;
+    }
+
+    if (subCmd === "add") {
+      if (!value) { printError("Usage: /memory add <text>"); return; }
+      try {
+        await this.memory.append(value);
+        printSuccess("Added to memory.");
+      } catch (err) {
+        printError(`Error: ${err.message}`);
+      }
+      return;
+    }
+
+    if (subCmd === "clear") {
+      try {
+        fs.writeFileSync(memPath, "", "utf-8");
+        printSuccess("Memory cleared.");
+      } catch (err) {
+        printError(`Error: ${err.message}`);
+      }
+      return;
+    }
+
+    if (subCmd === "edit") {
+      try {
+        const editor = process.env.VISUAL || process.env.EDITOR || "vi";
+        _execSync(`${editor} ${memPath}`, { stdio: "inherit", timeout: 300000 });
+        printSuccess("Memory file updated.");
+      } catch (err) {
+        printError(`Editor error: ${err.message}`);
+      }
+      return;
+    }
+
+    printError("Usage: /memory [show|add <text>|clear|edit]");
+  }
+
+  // ── /undo command ─────────────────────────────────────────────────────
+
+  async _handleUndo() {
+    if (!this.rollback || this.rollback.count === 0) {
+      printInfo("No checkpoints available for undo. (Tip: Triple-press ESC for rollback mode)");
+      return;
+    }
+    // Undo the last checkpoint (context rollback — revert messages only, not files)
+    const last = this.rollback.count - 1;
+    const result = this.rollback.contextRollback(last);
+    if (result) {
+      this.conversation.messages = result.messages;
+      printSuccess(`Undo: Reverted to checkpoint ${last + 1} (${result.label || "previous state"}).`);
+    } else {
+      printError("Undo failed. Try triple-press ESC for full rollback mode.");
+    }
   }
 
   // ── Graceful exit ─────────────────────────────────────────────────────────

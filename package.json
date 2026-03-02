@@ -6,13 +6,27 @@
   "type": "module",
   "bin": {
     "mercury": "./cli.js",
-    "mercury-code": "./cli.js"
+    "Mercury": "./cli.js",
+    "MERCURY": "./cli.js",
+    "mercury-code": "./cli.js",
+    "Mercury-Code": "./cli.js"
   },
   "scripts": {
     "start": "node cli.js",
     "dev": "node cli.js --verbose",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "postinstall": "chmod +x cli.js 2>/dev/null || true"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LHAMNS/Cloud-code-for-mercury-2.git"
+  },
+  "homepage": "https://github.com/LHAMNS/Cloud-code-for-mercury-2#readme",
+  "bugs": {
+    "url": "https://github.com/LHAMNS/Cloud-code-for-mercury-2/issues"
+  },
+  "os": ["linux", "darwin"],
+  "cpu": ["x64", "arm64"],
   "keywords": [
     "mercury",
     "mercury-2",
@@ -29,6 +43,8 @@
   "files": [
     "cli.js",
     "src/",
+    "install.sh",
+    "Makefile",
     "LICENSE.md",
     "README.md"
   ],

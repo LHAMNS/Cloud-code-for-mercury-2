@@ -101,13 +101,17 @@ export function printHelp() {
       ["/help", "Show this help"],
       ["/clear", "Clear conversation"],
       ["/edit", "Open $EDITOR for multiline input"],
+      ["/undo", "Undo last action (revert messages)"],
       ["/exit", "Exit Mercury Code"],
     ]],
     ["Security & Workspace", [
       ["/trust <mode>", "readonly | approval | open | outside"],
       ["/workspace <path>", "View/change workspace directory"],
+      ["/login <key>", "Set API key"],
+      ["/logout", "Clear API key"],
     ]],
     ["Model Settings", [
+      ["/model [name]", "View/change model"],
       ["/reasoning <level>", "instant | low | medium | high"],
       ["/settings [key val]", "View/modify any setting"],
       ["/config", "Show raw config (read-only)"],
@@ -122,11 +126,16 @@ export function printHelp() {
     ["Session", [
       ["/history [cmd]", "save | restore | list"],
       ["/context", "View context usage & stats"],
+      ["/cost", "Show token usage & cost estimate"],
+      ["/status", "Show current session status"],
+      ["/memory [cmd]", "show | add <text> | clear | edit"],
       ["/diff [ref]", "Show git diff (default: HEAD)"],
       ["/compact", "Compact/summarize conversation"],
       ["/new", "Start new conversation (saves current)"],
       ["/copy", "Copy last assistant reply to clipboard"],
       ["/init", "Create .mercury.md project config"],
+      ["/doctor", "Diagnose environment issues"],
+      ["/bug", "Report a bug"],
     ]],
   ];
 

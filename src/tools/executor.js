@@ -3,6 +3,8 @@ import { realpathSync } from 'node:fs';
 import { execSync, execFileSync } from 'node:child_process';
 import http from 'node:http';
 import https from 'node:https';
+import dns from 'node:dns';
+import net from 'node:net';
 import path from 'node:path';
 import { SubAgent, runSubAgentTeam } from '../subagent.js';
 import { MercuryClient } from '../client.js';
@@ -27,6 +29,62 @@ function _sanitizedEnv() {
   }
   // Keep PATH, HOME, USER, SHELL, LANG, TERM, EDITOR for normal operation
   return clean;
+}
+
+const PRIVATE_HOSTNAMES = new Set(["localhost", "localhost.localdomain"]);
+
+function _isPrivateIp(ip) {
+  if (!ip) return false;
+
+  if (net.isIPv4(ip)) {
+    const parts = ip.split('.').map((p) => Number(p));
+    if (parts.length !== 4 || parts.some((n) => Number.isNaN(n))) return false;
+
+    const [a, b] = parts;
+    return (
+      a === 10 ||
+      a === 127 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      a === 0
+    );
+  }
+
+  if (net.isIPv6(ip)) {
+    const normalized = ip.toLowerCase();
+    return (
+      normalized === '::1' ||
+      normalized.startsWith('fc') ||
+      normalized.startsWith('fd') ||
+      normalized.startsWith('fe8') ||
+      normalized.startsWith('fe9') ||
+      normalized.startsWith('fea') ||
+      normalized.startsWith('feb')
+    );
+  }
+
+  return false;
+}
+
+async function _isBlockedFetchTarget(hostname) {
+  if (!hostname) return true;
+  const normalized = hostname.toLowerCase();
+
+  if (PRIVATE_HOSTNAMES.has(normalized)) return true;
+
+  const ipVersion = net.isIP(normalized);
+  if (ipVersion) {
+    return _isPrivateIp(normalized);
+  }
+
+  try {
+    const records = await dns.promises.lookup(normalized, { all: true, verbatim: true });
+    if (!records || records.length === 0) return true;
+    return records.some((record) => _isPrivateIp(record.address));
+  } catch {
+    return true;
+  }
 }
 
 // ── Read tool token limit ────────────────────────────────────────────────────
@@ -179,23 +237,38 @@ export class ToolExecutor {
    * @returns {boolean}
    */
   _isInWorkspace(filePath) {
+    const absolutePath = path.resolve(filePath);
+
     try {
       const resolvedWorkspace = realpathSync(this.workspace);
-      // Try realpath first; if file doesn't exist yet, fall back to path.resolve
-      let resolvedPath;
+
+      // Existing path: resolve symlinks on the full target.
       try {
-        resolvedPath = realpathSync(filePath);
+        const resolvedPath = realpathSync(absolutePath);
+        return resolvedPath === resolvedWorkspace ||
+          resolvedPath.startsWith(resolvedWorkspace + path.sep);
       } catch {
-        resolvedPath = path.resolve(filePath);
+        // Non-existent path: resolve nearest existing ancestor to defeat symlink escapes.
+        let probe = path.dirname(absolutePath);
+        while (probe !== path.dirname(probe)) {
+          try {
+            const resolvedProbe = realpathSync(probe);
+            return resolvedProbe === resolvedWorkspace ||
+              resolvedProbe.startsWith(resolvedWorkspace + path.sep);
+          } catch {
+            probe = path.dirname(probe);
+          }
+        }
+
+        // Final fallback when no ancestor can be resolved.
+        return absolutePath === resolvedWorkspace ||
+          absolutePath.startsWith(resolvedWorkspace + path.sep);
       }
-      return resolvedPath === resolvedWorkspace ||
-        resolvedPath.startsWith(resolvedWorkspace + path.sep);
     } catch {
-      // If workspace itself doesn't exist, fall back to path.resolve
-      const resolvedPath = path.resolve(filePath);
+      // If workspace itself doesn't exist, fall back to lexical resolution.
       const resolvedWorkspace = path.resolve(this.workspace);
-      return resolvedPath === resolvedWorkspace ||
-        resolvedPath.startsWith(resolvedWorkspace + path.sep);
+      return absolutePath === resolvedWorkspace ||
+        absolutePath.startsWith(resolvedWorkspace + path.sep);
     }
   }
 
@@ -938,6 +1011,11 @@ export class ToolExecutor {
     if (this.sandbox?.enabled) {
       const check = this.sandbox.checkUrl(url);
       if (!check.allowed) return `Error: ${check.reason}`;
+    }
+
+    // Block SSRF to localhost/private networks for all trust modes.
+    if (await _isBlockedFetchTarget(new URL(url).hostname)) {
+      return 'Error: Fetch to localhost/private network addresses is blocked.';
     }
 
     // In readonly mode, only allow GET without body (prevent data exfiltration)

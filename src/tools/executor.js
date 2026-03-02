@@ -26,8 +26,8 @@ function _sanitizedEnv() {
 }
 
 // ── Read tool token limit ────────────────────────────────────────────────────
-// ~35,000 tokens at ~3.5 chars/token = 122,500 chars
-const READ_MAX_CHARS = 122500;
+// ~35,000 tokens at ~4 bytes/token ≈ 140,000 bytes (Codex-style bytes/4 estimation)
+const READ_MAX_CHARS = 140000;
 
 // ── ContextSearch constants ──────────────────────────────────────────────────
 // Read conversation log in chunks of ~100K tokens ≈ 350K chars

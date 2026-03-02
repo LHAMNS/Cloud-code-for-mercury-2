@@ -12,6 +12,8 @@ export class Conversation {
     this.messages = [];
     this._lastActualUsage = null;
     this._memoryContent = ""; // loaded from memory file
+    // Track messages added since last API usage report (Codex-style incremental estimation)
+    this._msgCountAtLastUsage = 0;
   }
 
   addUserMessage(content) {
@@ -53,7 +55,12 @@ export class Conversation {
   }
 
   updateUsage(usage) {
-    if (usage) this._lastActualUsage = usage;
+    if (usage) {
+      this._lastActualUsage = usage;
+      // Record how many messages exist at this point —
+      // any messages added after this are "new" and need heuristic estimation
+      this._msgCountAtLastUsage = this.messages.length;
+    }
   }
 
   /**
@@ -65,10 +72,23 @@ export class Conversation {
     }
   }
 
+  /**
+   * Get the best available token count estimate.
+   * Strategy (matching Codex CLI):
+   *   1. If we have API-reported usage, use prompt_tokens as baseline
+   *   2. Add heuristic estimate ONLY for messages added SINCE that API report
+   *   3. If no API usage available yet, fall back to full heuristic estimate
+   */
   getTokenEstimate() {
     if (this._lastActualUsage?.prompt_tokens) {
-      return this._lastActualUsage.prompt_tokens;
+      // Use API-reported total_tokens (input + output) as baseline
+      // Then add estimates for messages added since that report
+      const baseTokens = this._lastActualUsage.total_tokens || this._lastActualUsage.prompt_tokens;
+      const newMessages = this.messages.slice(this._msgCountAtLastUsage);
+      const newTokens = estimateMessagesTokens(newMessages);
+      return baseTokens + newTokens;
     }
+    // No API usage yet — full heuristic
     const sysTokens = estimateTokens(this.systemPrompt) + estimateTokens(this._memoryContent) + 4;
     return sysTokens + estimateMessagesTokens(this.messages);
   }

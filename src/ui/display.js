@@ -154,10 +154,40 @@ export function printResponseHeader() {
 
 /**
  * Print a footer after assistant response finishes.
+ * Optionally includes a right-aligned context gauge.
+ * @param {object} [contextInfo] - { usedTokens, maxTokens }
  */
-export function printResponseFooter() {
+export function printResponseFooter(contextInfo) {
   console.log(`${fg256(75)}  │${RESET}`);
-  console.log(`${fg256(75)}  └${"─".repeat(Math.min(getTermWidth() - 4, 68))}${RESET}`);
+
+  if (contextInfo && contextInfo.usedTokens !== undefined) {
+    const { usedTokens, maxTokens } = contextInfo;
+    const pct = Math.min(100, Math.round((usedTokens / maxTokens) * 100));
+    const color = _gaugeColor(pct);
+    const char = _gaugeChar(pct);
+    const usedK = usedTokens >= 1000 ? `${(usedTokens / 1000).toFixed(1)}K` : String(usedTokens);
+    const maxK = maxTokens >= 1000 ? `${(maxTokens / 1000).toFixed(0)}K` : String(maxTokens);
+
+    // Build mini arc segments
+    const segments = 10;
+    const filled = Math.round((pct / 100) * segments);
+    let arc = "";
+    for (let i = 0; i < segments; i++) {
+      arc += i < filled ? `${color}━${RESET}` : `${GRAY}━${RESET}`;
+    }
+
+    const gauge = `${color}${char}${RESET} ${arc} ${color}${BOLD}${pct}%${RESET} ${DIM}${usedK}/${maxK}${RESET}`;
+
+    // Calculate padding for right-alignment within the footer line
+    const footerLine = `  └${"─".repeat(Math.min(getTermWidth() - 4, 68))}`;
+    const gaugeVisLen = `${char} ${"━".repeat(segments)} ${pct}% ${usedK}/${maxK}`.length;
+    const lineWidth = Math.min(getTermWidth() - 2, 70);
+    const gaugePad = Math.max(0, lineWidth - gaugeVisLen - 4);
+
+    console.log(`${fg256(75)}  └${"─".repeat(Math.min(gaugePad, 40))}${RESET} ${gauge} ${fg256(75)}${"─".repeat(Math.max(0, lineWidth - gaugePad - gaugeVisLen - 6))}╯${RESET}`);
+  } else {
+    console.log(`${fg256(75)}  └${"─".repeat(Math.min(getTermWidth() - 4, 68))}${RESET}`);
+  }
 }
 
 /**
@@ -308,6 +338,85 @@ export function printTokenUsage(usage) {
 
   line += ` ${DIM}Σ${total_tokens}${RESET}`;
   console.log(line);
+}
+
+// ── Context Gauge (circular progress indicator) ──────────────────────────────
+
+// Unicode circle characters for progress stages
+const GAUGE_CHARS = ["○", "◔", "◑", "◕", "●"];
+
+/**
+ * Get the circular gauge character for a given percentage (0-100).
+ */
+function _gaugeChar(pct) {
+  if (pct <= 5) return GAUGE_CHARS[0];
+  if (pct <= 30) return GAUGE_CHARS[1];
+  if (pct <= 55) return GAUGE_CHARS[2];
+  if (pct <= 80) return GAUGE_CHARS[3];
+  return GAUGE_CHARS[4];
+}
+
+/**
+ * Get the color for a given percentage.
+ */
+function _gaugeColor(pct) {
+  if (pct > 90) return RED;
+  if (pct > 75) return YELLOW;
+  if (pct > 50) return fg256(214); // orange
+  return GREEN;
+}
+
+/**
+ * Render a compact context gauge string for display.
+ * Shows: ◑ 45% 58K/128K
+ * @param {number} usedTokens - Current token count
+ * @param {number} maxTokens - Maximum context tokens
+ * @returns {string} Formatted gauge string
+ */
+export function renderContextGauge(usedTokens, maxTokens) {
+  const pct = Math.min(100, Math.round((usedTokens / maxTokens) * 100));
+  const color = _gaugeColor(pct);
+  const char = _gaugeChar(pct);
+  const usedK = usedTokens >= 1000 ? `${(usedTokens / 1000).toFixed(0)}K` : String(usedTokens);
+  const maxK = maxTokens >= 1000 ? `${(maxTokens / 1000).toFixed(0)}K` : String(maxTokens);
+
+  return `${color}${BOLD}${char}${RESET} ${color}${pct}%${RESET} ${DIM}${usedK}/${maxK}${RESET}`;
+}
+
+/**
+ * Render a right-aligned context gauge line.
+ * Places the gauge at the right edge of the terminal.
+ * @param {number} usedTokens - Current token count
+ * @param {number} maxTokens - Maximum context tokens
+ */
+export function printContextGauge(usedTokens, maxTokens) {
+  const pct = Math.min(100, Math.round((usedTokens / maxTokens) * 100));
+  const color = _gaugeColor(pct);
+  const char = _gaugeChar(pct);
+  const usedK = usedTokens >= 1000 ? `${(usedTokens / 1000).toFixed(1)}K` : String(usedTokens);
+  const maxK = maxTokens >= 1000 ? `${(maxTokens / 1000).toFixed(0)}K` : String(maxTokens);
+
+  // Build mini progress arc with 8 segments
+  const segments = 8;
+  const filled = Math.round((pct / 100) * segments);
+  let arc = "";
+  for (let i = 0; i < segments; i++) {
+    if (i < filled) {
+      arc += `${color}▮${RESET}`;
+    } else {
+      arc += `${GRAY}▯${RESET}`;
+    }
+  }
+
+  // Gauge text
+  const gaugeText = `${color}${BOLD}${char}${RESET} ${arc} ${color}${BOLD}${pct}%${RESET} ${DIM}(${usedK} / ${maxK} tokens)${RESET}`;
+
+  // Calculate visible length for right alignment
+  const visibleLen = `${char} ${"▮".repeat(filled)}${"▯".repeat(segments - filled)} ${pct}% (${usedK} / ${maxK} tokens)`.length;
+  const w = getTermWidth();
+  const padLeft = Math.max(0, w - visibleLen - 2);
+
+  console.log(`${" ".repeat(padLeft)}${gaugeText}`);
 }
 
 /**

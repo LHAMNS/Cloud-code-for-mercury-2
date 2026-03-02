@@ -13,12 +13,12 @@
 import { MODEL_LIMITS } from "./config.js";
 
 // ── Mercury-2 limits ──────────────────────────────────────────────────────
-// 128K context, 50K max output → reserve 30K for output headroom
-const OUTPUT_RESERVE = 30000;
-const EFFECTIVE_INPUT = MODEL_LIMITS.max_context_tokens - OUTPUT_RESERVE; // ~98K
+// 128K context. Like Codex CLI, use 95% of the raw context as effective window.
+const EFFECTIVE_CONTEXT_PERCENT = 0.95;
+const EFFECTIVE_INPUT = Math.floor(MODEL_LIMITS.max_context_tokens * EFFECTIVE_CONTEXT_PERCENT);
 
-// Compact when context hits 80% of effective input
-const COMPACT_THRESHOLD = 0.80;
+// Compact when context hits 90% of effective input (Codex CLI default)
+const COMPACT_THRESHOLD = 0.90;
 // Super mode compacts earlier at 50%
 const SUPER_COMPACT_THRESHOLD = 0.50;
 
@@ -29,19 +29,43 @@ const KEEP_TURNS_SUPER = 2;
 // Budget for preserving user messages in compacted history (same as Codex: 20K)
 const USER_MSG_BUDGET = 20000;
 
-// ── Token estimation ──────────────────────────────────────────────────────
+// ── Token estimation (Codex-style: bytes / 4) ────────────────────────────
+// Codex CLI uses ceil(byte_length / 4) for all client-side token estimation.
+// This is a deliberate choice: simple, fast, no tokenizer dependency.
+// Authoritative counts come from the API response's usage field.
 
+const APPROX_BYTES_PER_TOKEN = 4;
+
+/**
+ * Estimate token count for a text string.
+ * Uses byte length / 4 (ceiling division), matching Codex CLI's approach.
+ * For non-ASCII text (CJK, etc.), byte length naturally accounts for
+ * multi-byte characters, which tend to use more tokens per character.
+ */
 export function estimateTokens(text) {
   if (!text) return 0;
-  return Math.ceil(text.length / 3.5);
+  // Use Buffer.byteLength for accurate byte count (handles UTF-8 multi-byte chars)
+  const byteLen = typeof Buffer !== "undefined"
+    ? Buffer.byteLength(text, "utf-8")
+    : new TextEncoder().encode(text).length;
+  return Math.ceil(byteLen / APPROX_BYTES_PER_TOKEN);
 }
 
+/**
+ * Estimate total tokens for a message array.
+ * JSON-serializes each message and divides by 4 (Codex approach).
+ * Adds per-message overhead for role/formatting tokens.
+ */
 export function estimateMessagesTokens(messages) {
   let total = 0;
   for (const msg of messages) {
+    // Per-message overhead: role + formatting markers (~4 tokens)
     total += 4;
     if (msg.content) total += estimateTokens(msg.content);
-    if (msg.tool_calls) total += estimateTokens(JSON.stringify(msg.tool_calls));
+    if (msg.tool_calls) {
+      // Serialize tool calls to get accurate byte count
+      total += estimateTokens(JSON.stringify(msg.tool_calls));
+    }
     if (msg.tool_call_id) total += 3;
   }
   return total;

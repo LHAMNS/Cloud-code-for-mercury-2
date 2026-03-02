@@ -32,6 +32,7 @@ import {
   printRollbackUI,
   printRollbackConfirm,
   printSessionList,
+  renderContextGauge,
   spinner,
 } from "./ui/display.js";
 
@@ -233,42 +234,38 @@ export class MercuryRepl {
   }
 
   /**
-   * Print a compact status bar showing workspace, trust, and context usage.
+   * Print a compact status bar showing workspace, trust, and context gauge.
    */
   _printStatusBar() {
     const E = "\x1b[", R = `${E}0m`, B = `${E}1m`, D = `${E}2m`;
-    const C = `${E}38;5;87m`, G = `${E}90m`, GR = `${E}32m`, Y = `${E}33m`;
+    const C = `${E}38;5;87m`, G = `${E}90m`;
     const w = (process.stdout.columns || 80) - 4;
     const sep = "─".repeat(Math.min(w, 68));
 
     const wsName = path.basename(this.workspace);
     const trustIcon = this.trustMode === TRUST_READONLY ? "🔒" : this.trustMode === TRUST_OPEN ? "🔓" : "🔐";
-    const ctxPct = this.conversation
-      ? ((this.conversation.getTokenEstimate() / MODEL_LIMITS.max_context_tokens) * 100).toFixed(0)
-      : "0";
+    const usedTokens = this.conversation ? this.conversation.getTokenEstimate() : 0;
+    const gauge = renderContextGauge(usedTokens, MODEL_LIMITS.max_context_tokens);
 
     console.log(`${G}  ${sep}${R}`);
     console.log(
-      `  ${C}${B}${wsName}${R} ${G}│${R} ${trustIcon} ${D}${this._trustLabel(this.trustMode)}${R} ${G}│${R} ` +
-      `${D}Context:${R} ${parseInt(ctxPct) > 75 ? Y : GR}${ctxPct}%${R}`
+      `  ${C}${B}${wsName}${R} ${G}│${R} ${trustIcon} ${D}${this._trustLabel(this.trustMode)}${R} ${G}│${R} ${gauge}`
     );
     console.log(`${G}  ${sep}${R}`);
   }
 
   /**
-   * Build a context-aware prompt string showing workspace + usage %.
+   * Build a context-aware prompt string showing workspace + circular gauge + usage %.
    */
   _buildPrompt() {
-    const E = "\x1b[", R = `${E}0m`, B = `${E}1m`, D = `${E}2m`;
-    const C = `${E}38;5;87m`, G = `${E}90m`, Y = `${E}33m`, GR = `${E}32m`;
+    const E = "\x1b[", R = `${E}0m`, B = `${E}1m`;
+    const C = `${E}38;5;87m`, G = `${E}90m`;
 
     const wsName = path.basename(this.workspace);
-    const ctxPct = this.conversation
-      ? Math.round((this.conversation.getTokenEstimate() / MODEL_LIMITS.max_context_tokens) * 100)
-      : 0;
-    const ctxColor = ctxPct > 75 ? Y : GR;
+    const usedTokens = this.conversation ? this.conversation.getTokenEstimate() : 0;
+    const gauge = renderContextGauge(usedTokens, MODEL_LIMITS.max_context_tokens);
 
-    return `${G}${wsName}${R} ${ctxColor}${ctxPct}%${R} ${C}${B}>${R} `;
+    return `${G}${wsName}${R} ${gauge} ${C}${B}>${R} `;
   }
 
   // ── ESC detection ─────────────────────────────────────────────────────────
@@ -646,13 +643,17 @@ export class MercuryRepl {
         this.conversation.updateUsage(response.usage);
       }
       // Context usage warning
-      const contextPct = this.conversation.getTokenEstimate() / MODEL_LIMITS.max_context_tokens;
+      const usedTokens = this.conversation.getTokenEstimate();
+      const contextPct = usedTokens / MODEL_LIMITS.max_context_tokens;
       if (contextPct > 0.9) {
         printWarning("Context usage above 90%. Consider /clear or /supercompress to free space.");
       } else if (contextPct > 0.75) {
         printWarning("Context usage above 75%. Compression may trigger soon.");
       }
-      printResponseFooter();
+      printResponseFooter({
+        usedTokens,
+        maxTokens: MODEL_LIMITS.max_context_tokens,
+      });
       return;
     }
   }
@@ -957,20 +958,27 @@ export class MercuryRepl {
     const filled = Math.round((pct / 100) * barWidth);
     const empty = barWidth - filled;
     const barColor = pct > 90 ? RD : pct > 75 ? Y : GR;
+    const gaugeChars = ["○", "◔", "◑", "◕", "●"];
+    const gaugeChar = pct <= 5 ? gaugeChars[0] : pct <= 30 ? gaugeChars[1] : pct <= 55 ? gaugeChars[2] : pct <= 80 ? gaugeChars[3] : gaugeChars[4];
+
+    // Source indicator: heuristic or API-based
+    const hasApiUsage = this.conversation._lastActualUsage?.prompt_tokens;
+    const sourceLabel = hasApiUsage ? `${GR}API-reported${R}` : `${Y}estimated (bytes/4)${R}`;
 
     console.log("");
     console.log(`${B}${C}  ╭─ Context Usage ─────────────────────────────────────╮${R}`);
     console.log(`${G}  │${R}`);
 
-    // Visual progress bar
-    const bar = `${barColor}${"█".repeat(filled)}${G}${"░".repeat(empty)}${R}`;
-    console.log(`${G}  │${R}  ${bar} ${barColor}${B}${pct}%${R}`);
-    console.log(`${G}  │${R}  ${D}${used.toLocaleString()} / ${max.toLocaleString()} tokens${R}`);
+    // Circular gauge + progress bar
+    const bar = `${barColor}${"━".repeat(filled)}${G}${"━".repeat(empty)}${R}`;
+    console.log(`${G}  │${R}  ${barColor}${B}${gaugeChar}${R} ${bar} ${barColor}${B}${pct}%${R}`);
+    console.log(`${G}  │${R}  ${D}${used.toLocaleString()} / ${max.toLocaleString()} tokens${R}  ${D}(${sourceLabel})${R}`);
     console.log(`${G}  │${R}`);
     console.log(`${G}  │${R}  ${GR}Messages${R}     ${D}${this.conversation.messages.length}${R}`);
     console.log(`${G}  │${R}  ${GR}Checkpoints${R}  ${D}${this.rollback.count}${R}`);
     console.log(`${G}  │${R}  ${GR}Session${R}      ${D}${this._sessionId}${R}`);
     console.log(`${G}  │${R}  ${GR}Compression${R}  ${D}${this.superCompress ? "Super (50%)" : "Normal (80%)"}${R}`);
+    console.log(`${G}  │${R}  ${GR}Estimation${R}   ${D}Codex-style (bytes÷4 + API usage)${R}`);
     console.log(`${G}  │${R}`);
     console.log(`${B}${C}  ╰──────────────────────────────────────────────────────╯${R}`);
     console.log("");

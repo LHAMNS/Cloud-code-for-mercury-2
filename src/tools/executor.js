@@ -17,21 +17,67 @@ import { executeAgentTeams } from '../agent-teams.js';
 import { labs } from '../labs.js';
 
 // ── Sanitized environment for child processes ────────────────────────────────
-// Strip keys that commonly hold secrets to prevent exfiltration via Bash
+// Strip keys that commonly hold secrets to prevent exfiltration via Bash.
+// Claude Code approach: comprehensive pattern matching + explicit allowlist.
 const SENSITIVE_ENV_PATTERNS = [
   /KEY/i, /SECRET/i, /TOKEN/i, /PASSWORD/i, /CREDENTIAL/i, /AUTH/i,
   /^AWS_/, /^GCP_/, /^AZURE_/, /^GITHUB_TOKEN$/, /^NPM_TOKEN$/,
+  /^INCEPTION_/, /^MERCURY_.*KEY/, /^DATABASE_URL$/i, /^REDIS_URL$/i,
+  /^MONGO_URI$/i, /^PRIVATE_KEY$/i, /^SESSION_SECRET$/i, /^COOKIE_SECRET$/i,
+  /^STRIPE_/, /^TWILIO_/, /^SENDGRID_/, /^SLACK_TOKEN$/i,
+  /^OPENAI_/, /^ANTHROPIC_/, /^GOOGLE_APPLICATION_CREDENTIALS$/,
 ];
+
+// Explicit allowlist for env vars that are always safe to pass through
+const SAFE_ENV_ALLOWLIST = new Set([
+  "PATH", "HOME", "USER", "SHELL", "LANG", "LC_ALL", "LC_CTYPE",
+  "TERM", "TERM_PROGRAM", "EDITOR", "VISUAL", "PAGER",
+  "NODE_ENV", "NODE_PATH", "NODE_OPTIONS",
+  "TMPDIR", "TMP", "TEMP",
+  "PWD", "OLDPWD", "SHLVL",
+  "HOSTNAME", "LOGNAME", "XDG_RUNTIME_DIR", "XDG_DATA_HOME", "XDG_CONFIG_HOME",
+  "DISPLAY", "COLORTERM", "FORCE_COLOR", "NO_COLOR",
+]);
 
 function _sanitizedEnv() {
   const clean = {};
   for (const [key, value] of Object.entries(process.env)) {
+    // Always pass through explicitly safe vars
+    if (SAFE_ENV_ALLOWLIST.has(key)) {
+      clean[key] = value;
+      continue;
+    }
+    // Block anything matching sensitive patterns
     if (SENSITIVE_ENV_PATTERNS.some(re => re.test(key))) continue;
     clean[key] = value;
   }
-  // Keep PATH, HOME, USER, SHELL, LANG, TERM, EDITOR for normal operation
   return clean;
 }
+
+// ── Suspicious command detection (Claude Code pattern) ────────────────────
+// Commands that look like exfiltration or destructive operations.
+const SUSPICIOUS_COMMAND_PATTERNS = [
+  // Data exfiltration via curl/wget with POST/upload
+  /\bcurl\b.*(-X\s*(POST|PUT)|--data|--upload|-d\s).*\bhttps?:\/\//i,
+  /\bwget\b.*--post/i,
+  // Encoding data for exfiltration
+  /\bbase64\b.*\|.*\bcurl\b/i,
+  // Direct network send of file contents
+  /\bcat\b.*\|.*\b(nc|ncat|netcat|curl|wget)\b/i,
+  // Reverse shells
+  /\bbash\s+-i\b.*\/dev\/(tcp|udp)/i,
+  /\bnc\b.*-e\s*\/bin\/(sh|bash)/i,
+  // Destructive commands on system paths
+  /\brm\s+(-rf?|--force).*\s+\/($|\s)/,
+  /\brm\s+(-rf?|--force).*\s+\/(etc|usr|bin|boot|lib|var)\b/,
+  /\bmkfs\b/i,
+  /\bdd\b.*of=\/dev\//i,
+  // Reading sensitive files
+  /\bcat\b.*\/(etc\/shadow|etc\/passwd|\.ssh\/id_)/,
+  // Env variable exfiltration
+  /\benv\b.*\|.*\b(curl|wget|nc)\b/i,
+  /\bprintenv\b.*\|.*\b(curl|wget|nc)\b/i,
+];
 
 // ── SSRF protection: block requests to private/loopback/link-local addresses ─
 
@@ -371,10 +417,16 @@ export class ToolExecutor {
    * @returns {string} File contents with line numbers
    */
   async _readFile(args) {
-    const { file_path, offset, limit } = args;
+    let { file_path, offset, limit } = args;
 
     if (!file_path) {
       return 'Error: file_path is required.';
+    }
+
+    // Normalize path and reject null bytes
+    file_path = path.resolve(file_path);
+    if (file_path.includes('\0')) {
+      return 'Error: Path contains null bytes (invalid).';
     }
 
     // Sandbox path check
@@ -444,13 +496,21 @@ export class ToolExecutor {
    * @returns {string} Success or error message
    */
   async _writeFile(args) {
-    const { file_path, content } = args;
+    let { file_path, content } = args;
 
     if (!file_path) {
       return 'Error: file_path is required.';
     }
     if (content === undefined || content === null) {
       return 'Error: content is required.';
+    }
+
+    // Normalize path to resolve .. traversals (security: prevents path confusion)
+    file_path = path.resolve(file_path);
+
+    // Block paths containing null bytes (path injection)
+    if (file_path.includes('\0')) {
+      return 'Error: Path contains null bytes (invalid).';
     }
 
     // Enforce workspace boundary for writes
@@ -491,7 +551,7 @@ export class ToolExecutor {
    * @returns {string} Success or error message
    */
   async _editFile(args) {
-    const { file_path, old_string, new_string, replace_all = false } = args;
+    let { file_path, old_string, new_string, replace_all = false } = args;
 
     if (!file_path) {
       return 'Error: file_path is required.';
@@ -504,6 +564,14 @@ export class ToolExecutor {
     }
     if (old_string === new_string) {
       return 'Error: old_string and new_string must be different.';
+    }
+
+    // Normalize path to resolve .. traversals
+    file_path = path.resolve(file_path);
+
+    // Block null bytes
+    if (file_path.includes('\0')) {
+      return 'Error: Path contains null bytes (invalid).';
     }
 
     // Enforce workspace boundary for edits
@@ -592,10 +660,24 @@ export class ToolExecutor {
       return 'Error: Bash is disabled in read-only mode.';
     }
 
+    // Suspicious command detection (Claude Code pattern)
+    // Flag potentially dangerous commands for user awareness
+    if (SUSPICIOUS_COMMAND_PATTERNS.some(re => re.test(command))) {
+      return `Error: Suspicious command blocked — "${command.slice(0, 100)}" matches a known dangerous pattern (data exfiltration, reverse shell, or destructive operation). If this is intentional, break it into smaller safe commands.`;
+    }
+
+    // Command length limit — prevent absurdly long commands that may hide malicious content
+    if (command.length > 100000) {
+      return 'Error: Command too long (max 100,000 characters). Break into smaller commands.';
+    }
+
     // Sandbox: wrap command in isolation if enabled
     const execCommand = this.sandbox?.enabled
       ? this.sandbox.wrapCommand(command, { cwd: this.workspace })
       : command;
+
+    // Output truncation limit (~35K tokens ≈ 140K chars) to prevent context flooding
+    const BASH_OUTPUT_MAX_CHARS = 140000;
 
     try {
       const result = execSync(execCommand, {
@@ -607,7 +689,12 @@ export class ToolExecutor {
         cwd: this.workspace, // Enforce workspace as working directory
         env: _sanitizedEnv(), // Strip sensitive env vars
       });
-      return result || '(command completed with no output)';
+      if (!result) return '(command completed with no output)';
+      if (result.length > BASH_OUTPUT_MAX_CHARS) {
+        return result.slice(0, BASH_OUTPUT_MAX_CHARS) +
+          `\n... (output truncated at ${BASH_OUTPUT_MAX_CHARS} chars, ${result.length} total)`;
+      }
+      return result;
     } catch (err) {
       // execSync throws on non-zero exit code; capture output anyway
       let output = '';
@@ -622,6 +709,11 @@ export class ToolExecutor {
         output += `\nError: Command timed out after ${timeout}ms`;
       } else if (!output) {
         output = `Error: Command failed with exit code ${err.status ?? 'unknown'}: ${err.message}`;
+      }
+      // Truncate error output too
+      if (output.length > BASH_OUTPUT_MAX_CHARS) {
+        output = output.slice(0, BASH_OUTPUT_MAX_CHARS) +
+          `\n... (error output truncated at ${BASH_OUTPUT_MAX_CHARS} chars)`;
       }
       return output;
     }
@@ -640,6 +732,11 @@ export class ToolExecutor {
 
     if (!pattern) {
       return 'Error: pattern is required.';
+    }
+
+    // Glob pattern length limit (prevents crafted patterns causing excessive processing)
+    if (pattern.length > 500) {
+      return 'Error: Glob pattern too long (max 500 characters).';
     }
 
     const searchDir = basePath || this.workspace;
@@ -887,10 +984,16 @@ export class ToolExecutor {
    * Apply multiple edits to a file in a single operation.
    */
   async _patchFile(args) {
-    const { file_path, edits } = args;
+    let { file_path, edits } = args;
     if (!file_path) return 'Error: file_path is required.';
     if (!edits || !Array.isArray(edits) || edits.length === 0) {
       return 'Error: edits array is required and must not be empty.';
+    }
+
+    // Normalize and validate path
+    file_path = path.resolve(file_path);
+    if (file_path.includes('\0')) {
+      return 'Error: Path contains null bytes (invalid).';
     }
 
     // Enforce workspace boundary for patches
@@ -1094,8 +1197,13 @@ export class ToolExecutor {
     const MAX_BODY_SIZE = 2 * 1024 * 1024; // 2MB max response
 
     if (!url) return 'Error: url is required.';
+    if (typeof url !== 'string') return 'Error: url must be a string.';
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
       return 'Error: url must start with http:// or https://';
+    }
+    // Block URLs with credentials (user:pass@host) — prevent credential smuggling
+    if (/@/.test(url.split('//')[1]?.split('/')[0] || '')) {
+      return 'Error: URLs with embedded credentials are not allowed.';
     }
     if (_redirectCount > MAX_REDIRECTS) {
       return `Error: Too many redirects (>${MAX_REDIRECTS})`;
@@ -1127,6 +1235,13 @@ export class ToolExecutor {
     return new Promise((resolve) => {
       const lib = parsedUrl.protocol === 'https:' ? https : http;
 
+      // Strip dangerous headers that could be used for SSRF or impersonation
+      const safeHeaders = { ...headers };
+      delete safeHeaders['Host'];  // Prevent Host header SSRF
+      delete safeHeaders['host'];
+      delete safeHeaders['Origin'];  // Prevent cross-origin confusion
+      delete safeHeaders['origin'];
+
       const options = {
         method: method.toUpperCase(),
         hostname: parsedUrl.hostname,
@@ -1134,7 +1249,7 @@ export class ToolExecutor {
         path: parsedUrl.pathname + parsedUrl.search,
         headers: {
           'User-Agent': 'MercuryCode/1.0',
-          ...headers,
+          ...safeHeaders,
         },
         timeout: 30000,
       };

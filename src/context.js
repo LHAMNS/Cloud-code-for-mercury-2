@@ -1,11 +1,15 @@
 // Mercury Code - Context Compaction
-// Direct port of OpenAI Codex CLI's compaction approach.
+// Combines best practices from Codex CLI and Claude Code:
+//   - Codex: bytes/4 estimation, handoff summary, recent user message preservation
+//   - Claude Code: configurable autocompact, memory persistence, compaction counters,
+//     manual /compact support, progressive degradation warnings
 //
 // How it works:
 //   1. When context reaches threshold, ask Mercury-2 to generate a handoff summary
 //   2. Replace old messages with: [recent user messages] + [summary]
 //   3. The FULL uncompressed conversation is always in .mercury/conversation.jsonl
 //      — the model can Read this file at any time to recover exact details
+//   4. Key facts extracted during compaction are saved to .mercury/memory.md
 //
 // This means compression is simple and lossy, but nothing is truly lost
 // because the complete log is always one Read() away.
@@ -18,7 +22,15 @@ const EFFECTIVE_CONTEXT_PERCENT = 0.95;
 const EFFECTIVE_INPUT = Math.floor(MODEL_LIMITS.max_context_tokens * EFFECTIVE_CONTEXT_PERCENT);
 
 // Compact when context hits 90% of effective input (Codex CLI default)
-const COMPACT_THRESHOLD = 0.90;
+// Can be overridden via MERCURY_AUTOCOMPACT_PCT env var (Claude Code style)
+const COMPACT_THRESHOLD = (() => {
+  const override = process.env.MERCURY_AUTOCOMPACT_PCT;
+  if (override) {
+    const pct = parseInt(override, 10);
+    if (pct > 0 && pct <= 100) return pct / 100;
+  }
+  return 0.90;
+})();
 // Super mode compacts earlier at 50%
 const SUPER_COMPACT_THRESHOLD = 0.50;
 
@@ -28,6 +40,9 @@ const KEEP_TURNS_SUPER = 2;
 
 // Budget for preserving user messages in compacted history (same as Codex: 20K)
 const USER_MSG_BUDGET = 20000;
+
+// Maximum compaction count before warning the user about accuracy degradation
+const MAX_COMPACT_BEFORE_WARN = 5;
 
 // ── Token estimation (Codex-style: bytes / 4) ────────────────────────────
 // Codex CLI uses ceil(byte_length / 4) for all client-side token estimation.
@@ -71,27 +86,86 @@ export function estimateMessagesTokens(messages) {
   return total;
 }
 
+// ── Compaction state tracker (Claude Code style) ──────────────────────────
+// Tracks how many times compaction has occurred in this session.
+// Used for progressive degradation warnings.
+
+let _compactionCount = 0;
+let _lastApiUsage = null; // Last API-reported token usage for calibration
+
+/**
+ * Update with API-reported usage for more accurate threshold checking.
+ * Call this after each API response with the usage field.
+ * @param {{ prompt_tokens: number, completion_tokens: number, total_tokens: number }} usage
+ */
+export function updateApiUsage(usage) {
+  if (usage && typeof usage.prompt_tokens === "number") {
+    _lastApiUsage = usage;
+  }
+}
+
+/**
+ * Get current context usage statistics for UI display.
+ * @param {Array} messages - Current message array
+ * @param {string} systemPrompt - System prompt text
+ * @returns {{ estimated: number, effective: number, pct: number, compactionCount: number, apiReported: number|null }}
+ */
+export function getContextStats(messages, systemPrompt) {
+  const sysTk = estimateTokens(systemPrompt) + 4;
+  const estimated = sysTk + estimateMessagesTokens(messages);
+  return {
+    estimated,
+    effective: EFFECTIVE_INPUT,
+    pct: estimated / EFFECTIVE_INPUT,
+    compactionCount: _compactionCount,
+    apiReported: _lastApiUsage?.prompt_tokens || null,
+  };
+}
+
+/**
+ * Reset compaction counter (e.g. on /clear).
+ */
+export function resetCompactionState() {
+  _compactionCount = 0;
+  _lastApiUsage = null;
+}
+
 // ── Public API ────────────────────────────────────────────────────────────
 
 export async function compressContext(messages, systemPrompt, client, memory, onInfo) {
-  await _compact(messages, systemPrompt, client, memory, onInfo, COMPACT_THRESHOLD, KEEP_TURNS);
+  return await _compact(messages, systemPrompt, client, memory, onInfo, COMPACT_THRESHOLD, KEEP_TURNS);
 }
 
 export async function superCompressContext(messages, systemPrompt, client, memory, onInfo) {
-  await _compact(messages, systemPrompt, client, memory, onInfo, SUPER_COMPACT_THRESHOLD, KEEP_TURNS_SUPER);
+  return await _compact(messages, systemPrompt, client, memory, onInfo, SUPER_COMPACT_THRESHOLD, KEEP_TURNS_SUPER);
 }
 
-// ── Core compaction (Codex-style) ─────────────────────────────────────────
+/**
+ * Force-compact regardless of threshold (Claude Code /compact command).
+ * Used when user explicitly requests compaction via /compact.
+ */
+export async function forceCompact(messages, systemPrompt, client, memory, onInfo) {
+  return await _compact(messages, systemPrompt, client, memory, onInfo, 0, KEEP_TURNS);
+}
+
+// ── Core compaction (Codex-style + Claude Code enhancements) ─────────────
 
 async function _compact(messages, systemPrompt, client, memory, onInfo, threshold, keepTurns) {
   const sysTk = estimateTokens(systemPrompt) + 4;
-  const usage = (sysTk + estimateMessagesTokens(messages)) / EFFECTIVE_INPUT;
+
+  // Prefer API-reported usage when available for more accurate threshold check
+  let estimatedTotal = sysTk + estimateMessagesTokens(messages);
+  if (_lastApiUsage?.prompt_tokens && threshold > 0) {
+    // Blend: use API count if available and recent (within same turn)
+    estimatedTotal = _lastApiUsage.prompt_tokens;
+  }
+  const usage = estimatedTotal / EFFECTIVE_INPUT;
 
   if (usage < threshold) return false;
 
   // Find cutoff: everything before the last N turns gets compressed
   const cutoff = _findTurnCutoff(messages, keepTurns);
-  if (cutoff <= 1) return;
+  if (cutoff <= 1) return false;
 
   const oldMessages = messages.slice(0, cutoff);
   const oldTokens = estimateMessagesTokens(oldMessages);
@@ -106,14 +180,24 @@ async function _compact(messages, systemPrompt, client, memory, onInfo, threshol
   let summary = null;
   let memoryEntry = null;
 
+  // Read existing memory to provide to compaction model (avoid duplicating facts)
+  let existingMemory = "";
+  if (memory) {
+    try { existingMemory = await memory.read(); } catch { /* non-critical */ }
+  }
+
   // Ask Mercury-2 to generate handoff summary with retry logic
   if (client) {
     const MAX_RETRIES = 2;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
+        const compactSystemPrompt = existingMemory
+          ? `${COMPACT_PROMPT}\n\nExisting memory (do NOT repeat these facts):\n${_trunc(existingMemory, 1000)}`
+          : COMPACT_PROMPT;
+
         const response = await client.chatCompletion(
           [
-            { role: "system", content: COMPACT_PROMPT },
+            { role: "system", content: compactSystemPrompt },
             { role: "user", content: recap },
           ],
           { max_tokens: 2500, temperature: 0.3, reasoning_effort: "low" }
@@ -162,14 +246,47 @@ async function _compact(messages, systemPrompt, client, memory, onInfo, threshol
   });
 
   // 3. Replace old messages
+  const preTokens = sysTk + estimateMessagesTokens(messages);
   messages.splice(0, cutoff, ...replacement);
+  const postTokens = sysTk + estimateMessagesTokens(messages);
 
-  const newUsage = (sysTk + estimateMessagesTokens(messages)) / EFFECTIVE_INPUT;
+  const newUsage = postTokens / EFFECTIVE_INPUT;
+
+  // Increment compaction counter
+  _compactionCount++;
+
+  // Log compact boundary marker (Claude Code style: tracks compaction history in memory)
+  if (memory) {
+    try {
+      const boundaryNote = `[compact #${_compactionCount}] ${preTokens}→${postTokens} tokens, ${oldMessages.length} msgs removed, ${messages.length} kept`;
+      await memory.append(boundaryNote);
+    } catch { /* non-critical */ }
+  }
+
+  // Progressive degradation warning (Claude Code pattern)
+  if (_compactionCount >= MAX_COMPACT_BEFORE_WARN) {
+    onInfo(
+      `Warning: ${_compactionCount} compactions in this session. ` +
+      `Long conversations with many compactions may reduce accuracy. ` +
+      `Consider starting a new session for complex tasks.`
+    );
+  }
+
   onInfo(
     `Compressed: ${oldMessages.length} messages → ${replacement.length}. ` +
     `${(usage * 100).toFixed(0)}% → ${(newUsage * 100).toFixed(0)}%. ` +
     `Full log: .mercury/conversation.jsonl`
   );
+
+  // Clear cached API usage after compaction (token counts changed)
+  _lastApiUsage = null;
+
+  // If still over threshold after compaction, try again with fewer turns
+  if (newUsage >= threshold && keepTurns > 1) {
+    onInfo("Still over threshold after compaction, compressing further...");
+    return await _compact(messages, systemPrompt, client, memory, onInfo, threshold, Math.max(1, keepTurns - 2));
+  }
+
   return true;
 }
 
@@ -202,7 +319,7 @@ Produce TWO sections:
 The handoff summary (max 400 words). Be concise, structured, and focused on helping the next LLM seamlessly continue.
 
 ## MEMORY
-Key facts for long-term reference (max 150 words): file paths, architecture decisions, config values, user preferences.`;
+Key facts for long-term reference (max 150 words): file paths, architecture decisions, config values, user preferences. Only include NEW facts not already in existing memory.`;
 
 // ── Recap builder ─────────────────────────────────────────────────────────
 
@@ -234,17 +351,22 @@ function _buildRecap(messages) {
         break;
       case "tool": {
         const c = msg.content || "";
-        if (c.length > 300) {
-          const lines = c.split("\n");
-          const hasErr = /error|fail|exception|denied/i.test(c);
+        // Strip content fence markers before summarizing
+        const cleaned = c
+          .replace(/\[TOOL_OUTPUT_BEGIN[^\]]*\]\n?/g, "")
+          .replace(/\n?\[TOOL_OUTPUT_END\]/g, "")
+          .trim();
+        if (cleaned.length > 300) {
+          const lines = cleaned.split("\n");
+          const hasErr = /error|fail|exception|denied/i.test(cleaned);
           if (hasErr) {
             const errLines = lines.filter(l => /error|fail|exception|denied/i.test(l)).slice(0, 3);
-            parts.push(`RESULT (error): ${errLines.join("; ") || _trunc(c, 200)}`);
+            parts.push(`RESULT (error): ${errLines.join("; ") || _trunc(cleaned, 200)}`);
           } else {
             parts.push(`RESULT (${lines.length} lines): ${_trunc(lines.slice(0, 2).join("\n"), 150)}…`);
           }
         } else {
-          parts.push(`RESULT: ${c}`);
+          parts.push(`RESULT: ${cleaned}`);
         }
         break;
       }
@@ -305,6 +427,7 @@ function _buildFallbackSummary(messages) {
   const filesWritten = new Set();
   const commands = [];
   const userReqs = [];
+  const errors = [];
 
   for (const msg of messages) {
     if (msg.role === "user" && msg.content && !msg.content.startsWith(SUMMARY_PREFIX)) {
@@ -331,6 +454,13 @@ function _buildFallbackSummary(messages) {
         }
       }
     }
+    // Track errors from tool results
+    if (msg.role === "tool" && msg.content) {
+      const content = msg.content;
+      if (/^Error:/i.test(content) || /error|fail|exception/i.test(content.slice(0, 100))) {
+        errors.push(_trunc(content, 100));
+      }
+    }
   }
 
   const p = [];
@@ -338,6 +468,7 @@ function _buildFallbackSummary(messages) {
   if (filesWritten.size > 0) p.push(`Modified: ${[...filesWritten].join(", ")}`);
   if (filesRead.size > 0) p.push(`Read: ${[...filesRead].join(", ")}`);
   if (commands.length > 0) p.push(`Commands: ${commands.slice(-5).join("; ")}`);
+  if (errors.length > 0) p.push(`Errors: ${errors.slice(-3).join("; ")}`);
   return p.join("\n") || "No specific actions recorded.";
 }
 

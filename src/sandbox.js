@@ -38,14 +38,20 @@ const SENSITIVE_PATHS = [
   ".aws/config",
   ".azure",
   ".config/gcloud",
+  ".config/gcloud/application_default_credentials.json",
   // Package manager tokens
   ".npmrc",
   ".yarnrc",
+  ".yarnrc.yml",
   ".pip/pip.conf",
   ".pypirc",
   // Shell history (may contain secrets pasted by mistake)
   ".bash_history",
   ".zsh_history",
+  ".node_repl_history",
+  ".python_history",
+  ".mysql_history",
+  ".psql_history",
   // Docker credentials
   ".docker/config.json",
   // Kubernetes config
@@ -53,10 +59,24 @@ const SENSITIVE_PATHS = [
   // Git credentials
   ".git-credentials",
   ".gitconfig",
+  // Password stores
+  ".password-store",
+  ".local/share/keyrings",
+  // Browser profiles (may contain cookies/passwords)
+  ".config/google-chrome",
+  ".mozilla/firefox",
   // Environment files that commonly contain secrets
   ".env",
   ".env.local",
   ".env.production",
+  ".env.staging",
+  ".env.development.local",
+  // Terraform state (may contain cloud secrets)
+  ".terraform",
+  // Vault tokens
+  ".vault-token",
+  // Netrc (credentials for HTTP/FTP)
+  ".netrc",
 ];
 
 // System paths that should never be written to

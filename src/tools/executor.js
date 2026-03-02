@@ -931,7 +931,7 @@ export class ToolExecutor {
    * @returns {string} Sub-agent's final response
    */
   async _subAgent(args) {
-    const { task, agent_type, resume, run_in_background, isolation } = args;
+    const { task, description, agent_type, resume, run_in_background, isolation, model, max_turns } = args;
     if (!task) {
       return 'Error: task is required.';
     }
@@ -951,6 +951,13 @@ export class ToolExecutor {
     } else {
       // Auto-select based on task description
       agentDef = matchAgentForTask(agents, task);
+    }
+
+    // Apply direct model override from tool parameter (takes precedence over agentDef)
+    if (model && agentDef) {
+      agentDef = { ...agentDef, model };
+    } else if (model && !agentDef) {
+      agentDef = { model, tools: null, disallowedTools: [] };
     }
 
     // Gate advanced sub-agent features through labs
@@ -981,6 +988,15 @@ export class ToolExecutor {
       resume: effectiveResume,
       runInBackground: effectiveBackground,
       isolation: effectiveIsolation,
+      maxTurns: max_turns || undefined,
+      onProgress: description
+        ? (event, detail) => {
+            // Use description as the agent label for progress display
+            if (this._onSubAgentProgress) {
+              this._onSubAgentProgress(description, event, detail);
+            }
+          }
+        : undefined,
     });
     return await agent.run();
   }
@@ -1343,6 +1359,12 @@ export class ToolExecutor {
         taskObj.agentDef = agents.get(taskObj.agent_type) || null;
       } else {
         taskObj.agentDef = matchAgentForTask(agents, taskObj.task);
+      }
+      // Apply per-task model override from tool parameter
+      if (taskObj.model && taskObj.agentDef) {
+        taskObj.agentDef = { ...taskObj.agentDef, model: taskObj.model };
+      } else if (taskObj.model && !taskObj.agentDef) {
+        taskObj.agentDef = { model: taskObj.model, tools: null, disallowedTools: [] };
       }
       return taskObj;
     });

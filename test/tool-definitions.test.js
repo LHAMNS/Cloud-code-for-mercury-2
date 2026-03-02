@@ -59,6 +59,18 @@ describe("TOOL_DEFINITIONS", () => {
     assert.ok(props.resume, "SubAgent missing resume param");
     assert.ok(props.run_in_background, "SubAgent missing run_in_background param");
     assert.ok(props.isolation, "SubAgent missing isolation param");
+    assert.ok(props.description, "SubAgent missing description param");
+    assert.ok(props.model, "SubAgent missing model param");
+    assert.ok(props.max_turns, "SubAgent missing max_turns param");
+  });
+
+  it("SubAgentTeam tasks support per-task model override", () => {
+    const team = TOOL_DEFINITIONS.find((t) => t.function.name === "SubAgentTeam");
+    assert.ok(team);
+    const taskProps = team.function.parameters.properties.tasks.items.properties;
+    assert.ok(taskProps.task, "SubAgentTeam task item missing task param");
+    assert.ok(taskProps.agent_type, "SubAgentTeam task item missing agent_type param");
+    assert.ok(taskProps.model, "SubAgentTeam task item missing model param");
   });
 
   it("AgentTeams tool has all actions documented", () => {

@@ -138,6 +138,8 @@ export class MercuryRepl {
       "/supercompress", "/contextsearch", "/sandbox", "/history",
       "/context", "/settings", "/config", "/edit", "/exit",
       "/agents", "/diff", "/compact", "/new", "/copy", "/init", "/labs",
+      "/cost", "/doctor", "/bug", "/status", "/memory", "/model",
+      "/undo", "/login", "/logout", "/verbose",
     ];
 
     this._rl = readline.createInterface({
@@ -1312,6 +1314,11 @@ export class MercuryRepl {
         this.client.apiKey = null;
         this.toolExecutor._clientOptions.apiKey = null;
         printInfo("API key cleared. Set again with /login or INCEPTION_API_KEY env var.");
+        break;
+
+      case "/verbose":
+        this.verbose = !this.verbose;
+        printInfo(`Verbose logging: ${this.verbose ? "ON" : "OFF"}`);
         break;
 
       case "/exit":

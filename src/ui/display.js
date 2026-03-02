@@ -129,6 +129,7 @@ export function printHelp() {
       ["/cost", "Show token usage & cost estimate"],
       ["/status", "Show current session status"],
       ["/memory [cmd]", "show | add <text> | clear | edit"],
+      ["/verbose", "Toggle verbose/debug logging"],
       ["/diff [ref]", "Show git diff (default: HEAD)"],
       ["/compact", "Compact/summarize conversation"],
       ["/new", "Start new conversation (saves current)"],

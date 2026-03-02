@@ -228,6 +228,12 @@ const SubAgentTool = {
     parameters: {
       type: "object",
       properties: {
+        description: {
+          type: "string",
+          description:
+            "A short (3-5 word) summary of what the agent will do. " +
+            "Shown in progress display. Example: 'Search auth code' or 'Fix test failures'.",
+        },
         task: {
           type: "string",
           description:
@@ -241,6 +247,7 @@ const SubAgentTool = {
           description:
             "The type of agent to spawn. Built-in types: 'explore' (read-only codebase search), " +
             "'plan' (architecture/design research), 'general-purpose' (full read/write tools). " +
+            "Custom agents from .mercury/agents/*.md are also available. " +
             "Defaults to auto-selection based on task description.",
         },
         resume: {
@@ -263,6 +270,18 @@ const SubAgentTool = {
             "Set to 'worktree' to run the agent in a temporary git worktree, " +
             "giving it an isolated copy of the repository. Changes are committed " +
             "to a temporary branch. Worktree is cleaned up if no changes are made.",
+        },
+        model: {
+          type: "string",
+          description:
+            "Optional model override for this agent. If not specified, inherits from parent. " +
+            "Use a lighter model for quick tasks to reduce cost and latency.",
+        },
+        max_turns: {
+          type: "number",
+          description:
+            "Maximum number of agentic turns (API round-trips) before stopping. " +
+            "Defaults to agent type setting (explore: 20, plan: 25, general: 30).",
         },
       },
       required: ["task"],
@@ -299,6 +318,11 @@ const SubAgentTeamTool = {
                 type: "string",
                 description:
                   "Agent type for this task: 'explore', 'plan', 'general-purpose', or a custom name.",
+              },
+              model: {
+                type: "string",
+                description:
+                  "Optional model override for this specific sub-agent.",
               },
             },
             required: ["task"],

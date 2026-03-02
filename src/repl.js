@@ -376,10 +376,13 @@ export class MercuryRepl {
       return { allowed: true, needsApproval: false };
     }
 
-    // SubAgent/SubAgentTeam: allowed except readonly
+    // SubAgent/SubAgentTeam: blocked in readonly; require approval in approval mode
     if (toolName === "SubAgent" || toolName === "SubAgentTeam") {
       if (this.trustMode === TRUST_READONLY) {
         return { allowed: false, needsApproval: false, reason: "Read-only mode: sub-agents disabled" };
+      }
+      if (this.trustMode === TRUST_APPROVAL) {
+        return { allowed: true, needsApproval: true, reason: `${toolName} may perform autonomous tool operations` };
       }
       return { allowed: true, needsApproval: false };
     }
@@ -406,9 +409,9 @@ export class MercuryRepl {
       return { allowed: true, needsApproval: true, reason: null };
     }
 
-    // Approval mode: writes within workspace are allowed
+    // Approval mode: writes always require explicit approval
     if (this.trustMode === TRUST_APPROVAL && WRITE_TOOLS.has(toolName)) {
-      return { allowed: true, needsApproval: false };
+      return { allowed: true, needsApproval: true, reason: `${toolName} requires approval in approval mode` };
     }
 
     return { allowed: true, needsApproval: false };

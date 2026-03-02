@@ -7,12 +7,14 @@ import { MercuryClient } from "./client.js";
 import { TOOL_DEFINITIONS } from "./tools/definitions.js";
 import { ToolExecutor } from "./tools/executor.js";
 import { buildSystemPrompt } from "./system-prompt.js";
-import { compressContext } from "./context.js";
+import { compressContext, trimStaleToolOutputs } from "./context.js";
 import { MODEL_LIMITS } from "./config.js";
 import { MemoryManager, ConversationLog } from "./memory.js";
 import { RollbackManager } from "./rollback.js";
 import { Sandbox, SANDBOX_OFF } from "./sandbox.js";
 import { resolveAgentTools } from "./agent-definitions.js";
+import { getHooksManager } from "./hooks.js";
+import { PermissionManager } from "./permissions.js";
 import path from "node:path";
 import fs from "node:fs";
 import { readFile, writeFile, mkdir, readdir, rm } from "node:fs/promises";
@@ -72,6 +74,8 @@ export class SubAgent {
    * @param {string} [options.resume] - Agent ID to resume (loads prior messages)
    * @param {boolean} [options.runInBackground] - Run asynchronously
    * @param {string} [options.isolation] - 'worktree' for git worktree isolation
+   * @param {object} [options.permissionRules] - Permission rules config from parent
+   * @param {number} [options.maxTurns] - Max turns override from tool call
    */
   constructor(options = {}) {
     this.task = options.task || "";
@@ -90,6 +94,24 @@ export class SubAgent {
     this._modelOverride = options.agentDef?.model || null;
     this._clientOptions = { apiKey: options.apiKey, baseURL: options.baseURL };
     this.client = new MercuryClient(this._clientOptions);
+
+    // Hooks manager (shared from parent or create new)
+    this._hooks = getHooksManager(this.workspace);
+
+    // Permission rules (inherited from parent agent)
+    this._permissions = new PermissionManager({
+      workspace: this.workspace,
+      trustMode: this.trustMode,
+    });
+    if (options.permissionRules) {
+      this._permissions.fromConfig(options.permissionRules);
+    }
+
+    // Max turns override (from tool call or agent definition)
+    this._maxTurnsOverride = options.maxTurns || null;
+
+    // Background output file for monitoring
+    this._outputFile = null;
 
     // Effective workspace (may be overridden by worktree)
     this._effectiveWorkspace = this.workspace;
@@ -152,29 +174,48 @@ export class SubAgent {
       }
     }
 
+    // Fire SubagentStart hook
+    await this._hooks.fireSubagentStart(this.agentId, this.task);
+
     // Background mode: launch and return agentId immediately
     if (this._runInBackground) {
       runningCount++;
       const agentId = this.agentId;
+
+      // Create output file for background monitoring
+      this._outputFile = path.join(this._agentDir, "output.log");
+      try {
+        await mkdir(this._agentDir, { recursive: true });
+        await writeFile(this._outputFile, `[${new Date().toISOString()}] Agent ${agentId} started\n`, "utf-8");
+      } catch { /* non-critical */ }
+
       // Run in background — store promise for later retrieval
       this._backgroundPromise = this._execute().then(
-        (result) => {
+        async (result) => {
           runningCount--;
-          this._saveTranscript(result);
-          this._cleanupWorktree();
+          await this._saveTranscript(result);
+          await this._cleanupWorktree();
           this._backgroundResult = result;
+          // Fire SubagentStop hook
+          await this._hooks.fireSubagentStop(agentId, result);
+          // Append to output file
+          try {
+            const { appendFile } = await import("node:fs/promises");
+            await appendFile(this._outputFile, `\n[${new Date().toISOString()}] Agent completed\n${result}\n`, "utf-8");
+          } catch { /* non-critical */ }
           return result;
         },
-        (err) => {
+        async (err) => {
           runningCount--;
-          this._cleanupWorktree();
+          await this._cleanupWorktree();
           this._backgroundResult = `Background agent error: ${err.message}`;
+          await this._hooks.fireSubagentStop(agentId, this._backgroundResult);
           return this._backgroundResult;
         }
       );
       // Track globally for retrieval
       _backgroundAgents.set(agentId, this);
-      return `Agent launched in background. agentId: ${agentId}\nResume later with: { "resume": "${agentId}", "task": "check results" }`;
+      return `Agent launched in background. agentId: ${agentId}\noutput_file: ${this._outputFile}\nResume later with: { "resume": "${agentId}", "task": "check results" }`;
     }
 
     runningCount++;
@@ -182,7 +223,12 @@ export class SubAgent {
       const result = await this._execute();
       await this._saveTranscript(result);
       await this._cleanupWorktree();
+      // Fire SubagentStop hook
+      await this._hooks.fireSubagentStop(this.agentId, result);
       return result;
+    } catch (err) {
+      await this._hooks.fireSubagentStop(this.agentId, `Error: ${err.message}`);
+      throw err;
     } finally {
       runningCount--;
     }
@@ -218,6 +264,8 @@ export class SubAgent {
       this.rollback = new RollbackManager(worktreeDir);
 
       this._emit("worktree", `Isolated in ${worktreeDir}`);
+      // Fire WorktreeCreate hook
+      await this._hooks.fireWorktreeCreate(worktreeDir, branchName, this.agentId);
     } catch (err) {
       throw new Error(`Git worktree creation failed: ${err.message}`);
     }
@@ -276,8 +324,12 @@ export class SubAgent {
           });
         } catch { /* branch may not exist */ }
         this._emit("worktree_cleanup", "No changes — worktree cleaned up");
+        // Fire WorktreeRemove hook
+        await this._hooks.fireWorktreeRemove(this._worktreePath, this._worktreeBranch, false);
       } else {
         this._emit("worktree_kept", `Worktree preserved at ${this._worktreePath} (branch: ${this._worktreeBranch})`);
+        // Fire WorktreeRemove hook (kept=true means changes were made)
+        await this._hooks.fireWorktreeRemove(this._worktreePath, this._worktreeBranch, true);
       }
     } catch {
       // Non-critical — leave worktree in place
@@ -358,8 +410,8 @@ export class SubAgent {
       ? resolveAgentTools(this.agentDef, this.trustMode)
       : resolveAgentTools({ tools: null, disallowedTools: [] }, this.trustMode);
 
-    // Resolve max turns from agent definition
-    this._maxTurns = this.agentDef?.maxTurns || MAX_SUB_TURNS;
+    // Resolve max turns from agent definition or tool call override
+    this._maxTurns = this._maxTurnsOverride || this.agentDef?.maxTurns || MAX_SUB_TURNS;
 
     // Resume: load prior transcript if resuming
     if (this._isResume) {
@@ -386,9 +438,24 @@ export class SubAgent {
     while (this._turnCount < this._maxTurns) {
       this._turnCount++;
 
+      // Stale tool output trimming (Claude Code pattern — before full compaction)
+      try {
+        const { trimmed, savedTokens } = trimStaleToolOutputs(this.messages, 3, 400);
+        if (trimmed > 0) {
+          this._emit("compressing", `Trimmed ${trimmed} stale tool outputs (~${savedTokens} tokens freed)`);
+        }
+      } catch { /* non-critical */ }
+
       // Codex-style context compression with per-agent memory
       try {
         const msgCountBefore = this.messages.length;
+        // Fire PreCompact hook before compaction
+        if (this._hooks.hasHandlers("PreCompact")) {
+          await this._hooks.firePreCompact(
+            this.messages.length,
+            0 // compactionCount not tracked per-agent
+          );
+        }
         await compressContext(
           this.messages,
           this._systemPrompt,
@@ -461,13 +528,36 @@ export class SubAgent {
             continue;
           }
 
-          // Sub-agent permission enforcement:
-          // In approval mode, block Bash in sub-agents (no user to approve)
-          if (this.trustMode === "approval" && fnName.toLowerCase() === "bash") {
-            const errMsg = "Error: Bash is not available to sub-agents in approval mode (no user to approve).";
+          // ── PreToolUse hook (can modify input, allow/deny) ──
+          const hookResult = await this._hooks.firePreToolUse(fnName, args);
+          if (hookResult.action === "deny") {
+            const errMsg = `Error: Tool ${fnName} denied by hook: ${hookResult.message || "blocked"}`;
+            this._emit("tool_result", `${fnName} denied by hook`);
+            this.messages.push({ role: "tool", tool_call_id: tc.id, content: errMsg });
+            continue;
+          }
+          if (hookResult.action === "modify" && hookResult.updatedInput) {
+            args = { ...args, ...hookResult.updatedInput };
+          }
+
+          // ── Permission rules check ──
+          const permCheck = this._permissions.check(fnName, args);
+          if (permCheck.decision === "deny") {
+            const errMsg = `Error: ${fnName} blocked by permission rule: ${permCheck.rule || "denied"}`;
             this._emit("tool_result", `${fnName} blocked`);
             this.messages.push({ role: "tool", tool_call_id: tc.id, content: errMsg });
             continue;
+          }
+          // In sub-agents, "ask" permission = deny (no user to approve)
+          if (permCheck.decision === "ask" && hookResult.action !== "allow") {
+            // Sub-agent permission enforcement:
+            // In approval mode, block tools that require approval (no user to approve)
+            if (this.trustMode === "approval") {
+              const errMsg = `Error: ${fnName} requires approval, not available to sub-agents in approval mode.`;
+              this._emit("tool_result", `${fnName} blocked`);
+              this.messages.push({ role: "tool", tool_call_id: tc.id, content: errMsg });
+              continue;
+            }
           }
 
           // Block Fetch POST with body in sub-agents (approval mode) — prevent exfiltration
@@ -491,6 +581,9 @@ export class SubAgent {
           );
 
           this._emit("tool_result", `${fnName} done`);
+
+          // ── PostToolUse hook ──
+          await this._hooks.firePostToolUse(fnName, args, String(result));
 
           // Log tool result
           await this.log.append({ role: "tool", name: fnName, result: String(result) });
@@ -552,7 +645,7 @@ function _trunc(s, max) {
  * @returns {Promise<string[]>} Array of results from each sub-agent
  */
 export async function runSubAgentTeam(tasks, options = {}) {
-  const { onAgentProgress, workspace, trustMode, sandboxConfig, agentDef, ...restOptions } = options;
+  const { onAgentProgress, workspace, trustMode, sandboxConfig, agentDef, permissionRules, ...restOptions } = options;
 
   const agents = tasks.map(
     (t, i) =>
@@ -562,6 +655,7 @@ export async function runSubAgentTeam(tasks, options = {}) {
         workspace,
         trustMode,
         sandboxConfig,
+        permissionRules,
         agentDef: (typeof t === "object" && t.agentDef) ? t.agentDef : agentDef,
         onProgress: onAgentProgress
           ? (event, detail) => onAgentProgress(i, event, detail)

@@ -505,3 +505,164 @@ function _trunc(text, max) {
   if (typeof text !== "string") text = String(text);
   return text.length <= max ? text : text.slice(0, max) + "…";
 }
+
+// ── Context Editing (Claude Code pattern) ─────────────────────────────────
+// Selectively clear stale tool call results to reduce context size
+// without full compaction. This targets large tool outputs that are
+// unlikely to be needed again (e.g., old file reads, long command outputs).
+
+/**
+ * Trim stale tool outputs to reduce token count.
+ * Replaces large tool results older than `keepTurns` with a short summary.
+ * Claude Code reports 84% token reduction from this technique.
+ *
+ * @param {Array} messages - Conversation messages (mutated in place)
+ * @param {number} [keepTurns=4] - Number of recent turns to preserve fully
+ * @param {number} [maxToolOutputTokens=500] - Max tokens for old tool results
+ * @returns {{ trimmed: number, savedTokens: number }}
+ */
+export function trimStaleToolOutputs(messages, keepTurns = 4, maxToolOutputTokens = 500) {
+  const cutoff = _findTurnCutoff(messages, keepTurns);
+  let trimmed = 0;
+  let savedTokens = 0;
+
+  for (let i = 0; i < cutoff; i++) {
+    const msg = messages[i];
+    if (msg.role !== "tool" || !msg.content) continue;
+
+    const tokens = estimateTokens(msg.content);
+    if (tokens <= maxToolOutputTokens) continue;
+
+    // Strip fence markers for analysis
+    const cleaned = msg.content
+      .replace(/\[TOOL_OUTPUT_BEGIN[^\]]*\]\n?/g, "")
+      .replace(/\n?\[TOOL_OUTPUT_END\]/g, "")
+      .trim();
+
+    // Build a short summary of the tool output
+    const lines = cleaned.split("\n");
+    const isError = /^Error:|error|fail|exception/i.test(cleaned.slice(0, 200));
+    let summary;
+
+    if (isError) {
+      // Preserve error messages fully (they're usually short and important)
+      const errLines = lines.filter(l => /error|fail|exception/i.test(l)).slice(0, 5);
+      summary = `[Tool output trimmed: ${tokens} tokens → error summary]\n${errLines.join("\n")}`;
+    } else {
+      // For normal outputs, keep first and last few lines
+      const head = lines.slice(0, 3).join("\n");
+      const tail = lines.length > 6 ? "\n...\n" + lines.slice(-3).join("\n") : "";
+      summary = `[Tool output trimmed: ${tokens} tokens, ${lines.length} lines]\n${head}${tail}`;
+    }
+
+    const newTokens = estimateTokens(summary);
+    savedTokens += tokens - newTokens;
+    msg.content = summary;
+    trimmed++;
+  }
+
+  return { trimmed, savedTokens };
+}
+
+/**
+ * Clear all tool outputs for a specific tool call (by tool_call_id).
+ * Useful for invalidating cached file reads after the file has been modified.
+ *
+ * @param {Array} messages - Conversation messages (mutated in place)
+ * @param {string} toolCallId - The tool_call_id to clear
+ * @returns {boolean} Whether a message was found and cleared
+ */
+export function clearToolOutput(messages, toolCallId) {
+  for (const msg of messages) {
+    if (msg.role === "tool" && msg.tool_call_id === toolCallId) {
+      const oldTokens = estimateTokens(msg.content);
+      msg.content = `[Output cleared — ${oldTokens} tokens freed]`;
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Aggressive context editing: trim all tool outputs older than keepTurns
+ * and also remove consecutive tool call/result pairs for the same file
+ * (keeping only the most recent read of each file).
+ *
+ * @param {Array} messages - Conversation messages (mutated in place)
+ * @param {number} [keepTurns=4]
+ * @returns {{ trimmed: number, savedTokens: number, deduped: number }}
+ */
+export function aggressiveTrim(messages, keepTurns = 4) {
+  // First: basic trim
+  const { trimmed, savedTokens } = trimStaleToolOutputs(messages, keepTurns, 300);
+
+  // Second: deduplicate file reads (keep last read of each file)
+  const cutoff = _findTurnCutoff(messages, keepTurns);
+  const lastReadOf = new Map(); // file_path → index of last tool result
+
+  // Forward pass: find the last read result for each file
+  for (let i = 0; i < cutoff; i++) {
+    const msg = messages[i];
+    if (msg.role === "assistant" && msg.tool_calls) {
+      for (const tc of msg.tool_calls) {
+        if (tc.function.name === "Read") {
+          try {
+            const args = JSON.parse(tc.function.arguments);
+            if (args.file_path) {
+              // Find corresponding tool result
+              const resultIdx = messages.findIndex(
+                (m, j) => j > i && m.role === "tool" && m.tool_call_id === tc.id
+              );
+              if (resultIdx !== -1 && resultIdx < cutoff) {
+                // Track: if we've seen this file before, mark the old one for trimming
+                if (lastReadOf.has(args.file_path)) {
+                  const oldIdx = lastReadOf.get(args.file_path);
+                  if (oldIdx < resultIdx) {
+                    lastReadOf.set(args.file_path, resultIdx);
+                  }
+                } else {
+                  lastReadOf.set(args.file_path, resultIdx);
+                }
+              }
+            }
+          } catch { /* skip */ }
+        }
+      }
+    }
+  }
+
+  // Trim non-latest reads
+  let deduped = 0;
+  for (let i = 0; i < cutoff; i++) {
+    const msg = messages[i];
+    if (msg.role !== "tool" || !msg.content) continue;
+
+    // Check if this is a Read result that's not the latest for its file
+    const tokens = estimateTokens(msg.content);
+    if (tokens < 200) continue; // Don't bother with small outputs
+
+    // Check if this result index is superseded by a later read
+    for (const [filePath, latestIdx] of lastReadOf) {
+      if (latestIdx > i && msg.tool_call_id) {
+        // This might be an older read of the same file — check
+        const precedingAssistant = messages.slice(Math.max(0, i - 5), i).find(
+          (m) => m.role === "assistant" && m.tool_calls?.some(
+            (tc) => tc.id === msg.tool_call_id && tc.function.name === "Read"
+          )
+        );
+        if (precedingAssistant) {
+          const tc = precedingAssistant.tool_calls.find((t) => t.id === msg.tool_call_id);
+          try {
+            const args = JSON.parse(tc.function.arguments);
+            if (args.file_path === filePath && i !== latestIdx) {
+              msg.content = `[Superseded read of ${filePath} — see later read]`;
+              deduped++;
+            }
+          } catch { /* skip */ }
+        }
+      }
+    }
+  }
+
+  return { trimmed, savedTokens, deduped };
+}

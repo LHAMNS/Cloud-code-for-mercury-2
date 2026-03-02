@@ -15,6 +15,7 @@
 //   - File-based persistence for crash recovery
 
 import { SubAgent } from "./subagent.js";
+import { getHooksManager } from "./hooks.js";
 import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import fs from "node:fs";
@@ -70,6 +71,9 @@ export class AgentTeam {
     this.workspace = options.workspace || process.cwd();
     this._agentOptions = options.agentOptions || {};
     this._onEvent = options.onEvent || null;
+
+    // Hooks manager for lifecycle events
+    this._hooks = getHooksManager(this.workspace);
 
     // Team data directory
     this._teamDir = path.join(this.workspace, ".mercury", "teams", this.teamName);
@@ -166,7 +170,7 @@ export class AgentTeam {
    * @param {string} taskId
    * @param {string} result
    */
-  completeTask(taskId, result, isError = false) {
+  async completeTask(taskId, result, isError = false) {
     const task = this.tasks.get(taskId);
     if (!task) return;
 
@@ -176,6 +180,9 @@ export class AgentTeam {
     task.completedAt = Date.now();
     this._emit("task_completed", { taskId, title: task.title, error: isError });
     this._persist();
+
+    // Fire TaskCompleted hook
+    await this._hooks.fireTaskCompleted(taskId, result, isError);
   }
 
   /**
@@ -319,20 +326,24 @@ export class AgentTeam {
 
         assignments.push(
           mate.agent.run().then(
-            (result) => {
-              this.completeTask(task.id, result);
+            async (result) => {
+              await this.completeTask(task.id, result);
               results.set(task.id, result);
               mate.status = "idle";
               mate.currentTaskId = null;
               this._emit("teammate_idle", { id, name: mate.name });
+              // Fire TeammateIdle hook
+              await this._hooks.fireTeammateIdle(id, mate.name);
             },
-            (err) => {
+            async (err) => {
               const errMsg = `Error: ${err.message}`;
-              this.completeTask(task.id, errMsg, true);
+              await this.completeTask(task.id, errMsg, true);
               results.set(task.id, errMsg);
               mate.status = "idle";
               mate.currentTaskId = null;
               this._emit("teammate_idle", { id, name: mate.name });
+              // Fire TeammateIdle hook
+              await this._hooks.fireTeammateIdle(id, mate.name);
             }
           )
         );

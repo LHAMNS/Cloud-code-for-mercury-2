@@ -1,21 +1,18 @@
 {
   "name": "mercury-code",
-  "version": "1.2.0",
-  "description": "Interactive AI coding assistant powered by Mercury-2 diffusion model from Inception Labs",
+  "version": "1.3.0",
+  "description": "Interactive AI coding assistant powered by Mercury-2 diffusion model from Inception Labs. Like Claude Code, but for Mercury-2.",
   "main": "src/index.js",
   "type": "module",
   "bin": {
     "mercury": "./cli.js",
-    "Mercury": "./cli.js",
-    "MERCURY": "./cli.js",
-    "mercury-code": "./cli.js",
-    "Mercury-Code": "./cli.js"
+    "mercury-code": "./cli.js"
   },
   "scripts": {
     "start": "node cli.js",
     "dev": "node cli.js --verbose",
     "test": "node --test test/*.test.js",
-    "postinstall": "chmod +x cli.js 2>/dev/null || true"
+    "postinstall": "node scripts/postinstall.js"
   },
   "repository": {
     "type": "git",
@@ -25,16 +22,18 @@
   "bugs": {
     "url": "https://github.com/LHAMNS/Cloud-code-for-mercury-2/issues"
   },
-  "os": ["linux", "darwin"],
-  "cpu": ["x64", "arm64"],
   "keywords": [
     "mercury",
     "mercury-2",
+    "mercury-code",
     "diffusion-model",
     "coding-assistant",
     "cli",
     "ai",
-    "inception-labs"
+    "inception-labs",
+    "mcp",
+    "agent",
+    "coding"
   ],
   "engines": {
     "node": ">=18.17.0"
@@ -43,8 +42,9 @@
   "files": [
     "cli.js",
     "src/",
+    "scripts/",
     "install.sh",
-    "Makefile",
+    "install.ps1",
     "LICENSE.md",
     "README.md"
   ],

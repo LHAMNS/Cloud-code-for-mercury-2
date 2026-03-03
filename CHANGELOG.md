@@ -1,5 +1,73 @@
 # Changelog
 
+## v1.3.0 (2026-03-03)
+
+### MCP (Model Context Protocol) Support
+- **MCP server manager** (`src/mcp.js`): Full MCP client implementation supporting stdio and HTTP transports.
+  - JSON-RPC 2.0 protocol with `initialize`, `tools/list`, `tools/call` methods
+  - Automatic tool discovery and namespaced tool names (`mcp__<server>__<tool>`)
+  - Config loading from `.mercury/mcp.json`, `.mcp.json`, or `~/.mercury/mcp.json`
+  - Connection status monitoring and graceful shutdown
+  - CLI flag: `--mcp-config <path>` for explicit config file
+- **REPL integration**: `/mcp status` and `/mcp reload` commands, MCP status panel on startup
+
+### Skills System
+- **Skills engine** (`src/skills.js`): Prompt-based extensions defined in SKILL.md files with YAML frontmatter.
+  - Skill discovery from `.mercury/skills/*.md` (project) and `~/.mercury/skills/*.md` (user)
+  - Argument substitution via `{{argument}}` and `$ARGUMENTS` placeholders
+  - Per-skill model override, allowed/disallowed tools, agent type selection
+  - Model-invocable and user-invocable skill types
+  - Tab completion for `/skillname` commands
+- **REPL integration**: `/skills` command, skill invocation via `/skillname [args]`
+
+### Plan Mode
+- **Read-only analysis mode**: `--plan` CLI flag or `/trust plan` command
+  - Restricts model to read-only tools (Read, Glob, Grep, ListDir, Diff)
+  - Styled plan mode banner with instructions
+  - Aliased as `readonly` trust mode with plan file output
+
+### Enhanced Trust Modes (5-mode system)
+- **Full Claude Code parity**: `open`, `acceptEdits`, `approval` (default), `dontAsk`, `readonly`
+- **acceptEdits mode**: Auto-approves Write/Edit/Patch within workspace, prompts for Bash/Fetch/MCP
+- **dontAsk mode**: Denies all tools except read-only set
+- **Plan mode alias**: Maps to `readonly` with plan file output enabled
+- **CLI flag**: `--trust-mode <mode>` for startup configuration
+
+### Cross-Platform Support
+- **Linux**: x64 and ARM64
+- **macOS**: Intel (x64) and Apple Silicon (arm64)
+- **Windows**: Native support with PowerShell install script (`install.ps1`)
+- **Postinstall script** (`scripts/postinstall.js`): Auto-configures permissions and creates `~/.mercury` config directory
+- **No os/cpu restrictions** in package.json for universal `npm install -g mercury-code`
+
+### UI Redesign
+- **Mercury-themed welcome screen**: True-color (24-bit RGB) Mercury palette with realistic planet surface colors
+- **Starfield background**: Animated stars with twinkle effects using Unicode star characters
+- **Two display modes** (togglable via `/settings planet_logo on|off`):
+  - **Planet mode**: Full Mercury planet ASCII art with MERCURY CODE text overlaid, animated emergence from center
+  - **Classic mode** (default): Block-letter MERCURY CODE text on starfield with shooting star animation and gradient text reveal
+- **Shooting star animation**: Multi-frame meteor streak across the starfield
+- **MCP status panel**: Styled connection status for MCP servers on startup
+- **Plan mode banner**: Amber-styled read-only analysis mode indicator
+- **Tool icons**: Custom icons for Skill, MCP, AgentTeams, LSP, and AstSearch tools
+
+### Easter Egg
+- **Double-tap Enter** on empty prompt to enter logo edit mode
+- **Type "cold"** to discover Mercury's secret (谐音梗: code → cold, Mercury's night side is −180°C!)
+
+### Test Suite
+- **415 tests** across 109 test suites (+40 new tests), covering:
+  - McpManager: creation, config loading, tool identification, error handling, shutdown
+  - SkillManager: discovery, completions, tool definitions, empty state handling
+  - Skill: creation, argument rendering, defaults, model invocation control
+  - Enhanced Trust Modes: 5-mode exports, TRUST_LEVELS ordering
+  - Display Module: function exports, MCP status, context gauge
+  - Tool Definitions: base tool completeness, function calling format validation
+  - CLI flags: plan, trust-mode, mcp-config, sandbox support
+  - Package.json: version, binaries, cross-platform, keywords, postinstall
+  - Sandbox: cross-platform path handling, mode exports
+  - Postinstall and Windows install scripts
+
 ## v1.2.0 (2026-03-03)
 
 ### Enhanced Permission System (Claude Code Parity)

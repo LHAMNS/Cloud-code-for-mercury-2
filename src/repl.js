@@ -40,8 +40,14 @@ import {
   printRollbackConfirm,
   printSessionList,
   renderContextGauge,
+  printPlanModeBanner,
+  printMcpStatus,
+  printEditableLogo,
+  playMercuryColdEasterEgg,
   spinner,
 } from "./ui/display.js";
+import { McpManager } from "./mcp.js";
+import { SkillManager } from "./skills.js";
 
 // Maximum agentic tool-call turns before forcing a stop
 const MAX_TOOL_TURNS = 100;
@@ -52,10 +58,13 @@ const ESC_WINDOW_MS = 800;
 // Long paste threshold: inputs longer than this get collapsed in display
 const PASTE_COLLAPSE_THRESHOLD = 200;
 
-// Trust modes
+// Trust modes (5-mode system matching Claude Code)
 const TRUST_READONLY = "readonly";
 const TRUST_APPROVAL = "approval";
+const TRUST_ACCEPT_EDITS = "acceptEdits";
 const TRUST_OPEN = "open";
+const TRUST_DONT_ASK = "dontAsk";
+const TRUST_PLAN = "plan"; // alias for readonly + plan file output
 
 // Read-only tools (allowed in all modes). Fetch is handled separately due to POST restrictions.
 const READ_TOOLS = new Set(["Read", "Glob", "Grep", "ListDir", "Diff"]);
@@ -91,7 +100,17 @@ export class MercuryRepl {
     // Workspace and trust
     this.workspace = options.workspace || process.cwd();
     this.trustMode = options.trustMode || TRUST_APPROVAL;
+    this.planMode = options.trustMode === TRUST_PLAN || options.trustMode === "plan";
+    if (this.planMode) this.trustMode = TRUST_READONLY;
     this.allowOutsideWorkspace = false;
+
+    // MCP and Skills
+    this.mcpManager = new McpManager();
+    this.skillManager = new SkillManager();
+    this._mcpConfigPath = options.mcpConfigPath || null;
+
+    // UI preferences
+    this.showPlanet = options.showPlanet === true; // default: OFF (classic text logo)
 
     // Sandbox: default ON for main agent and all sub-agents
     this.sandbox = new Sandbox({
@@ -121,6 +140,10 @@ export class MercuryRepl {
     // ESC tracking
     this._escPresses = [];
     this._inRollbackMode = false;
+
+    // Easter egg: double-tap Enter on empty prompt
+    this._lastEmptyEnterTime = 0;
+    this._inLogoEditMode = false;
   }
 
   _generateSessionId() {
@@ -139,7 +162,7 @@ export class MercuryRepl {
       "/context", "/settings", "/config", "/edit", "/exit",
       "/agents", "/diff", "/compact", "/new", "/copy", "/init", "/labs",
       "/cost", "/doctor", "/bug", "/status", "/memory", "/model",
-      "/undo", "/login", "/logout", "/verbose",
+      "/undo", "/login", "/logout", "/verbose", "/mcp", "/skills",
     ];
 
     this._rl = readline.createInterface({
@@ -148,8 +171,9 @@ export class MercuryRepl {
       prompt: "\x1b[38;5;87m\x1b[1m> \x1b[0m",
       completer: (line) => {
         if (!line.startsWith("/")) return [[], line];
-        const hits = SLASH_CMDS.filter((c) => c.startsWith(line));
-        return [hits.length ? hits : SLASH_CMDS, line];
+        const allCmds = [...SLASH_CMDS, ...this.skillManager.getCompletions()];
+        const hits = allCmds.filter((c) => c.startsWith(line));
+        return [hits.length ? hits : allCmds, line];
       },
     });
 
@@ -177,7 +201,30 @@ export class MercuryRepl {
     this.conversation = new Conversation(buildSystemPrompt(this.workspace, this.trustMode, this.sandbox));
     await this.conversation.loadMemory(this.memory);
 
-    await printWelcome();
+    // Load MCP servers
+    const mcpResult = await this.mcpManager.loadConfig(this.workspace, this._mcpConfigPath);
+
+    // Discover skills
+    await this.skillManager.discover(this.workspace);
+
+    await printWelcome({ showPlanet: this.showPlanet });
+
+    // Show plan mode banner if active
+    if (this.planMode) {
+      printPlanModeBanner();
+    }
+
+    // Show MCP status if any servers configured
+    if (mcpResult.count > 0) {
+      printMcpStatus(this.mcpManager.getStatus());
+      console.log("");
+    }
+
+    // Show skills count if any found
+    if (this.skillManager.count > 0) {
+      printInfo(`${this.skillManager.count} skill(s) loaded. Use /skills to list.`);
+    }
+
     this._printStatusBar();
     console.log("");
 
@@ -327,9 +374,11 @@ export class MercuryRepl {
 
   _trustLabel(mode) {
     switch (mode) {
-      case TRUST_READONLY: return "Read-only (only read operations allowed)";
+      case TRUST_READONLY: return this.planMode ? "Plan (read-only analysis + plan file)" : "Read-only (only read operations allowed)";
       case TRUST_APPROVAL: return "Approval (asks before writes/commands)";
+      case TRUST_ACCEPT_EDITS: return "Accept Edits (auto-approve file edits, ask for Bash)";
       case TRUST_OPEN: return "Full open (all ops within workspace)";
+      case TRUST_DONT_ASK: return "Don't Ask (deny unless pre-approved)";
       default: return mode;
     }
   }
@@ -402,6 +451,31 @@ export class MercuryRepl {
         }
       }
     });
+  }
+
+  // ── Easter Egg: Logo Edit Mode ───────────────────────────────────────────
+
+  /**
+   * Enter logo edit mode (triggered by double-tap Enter on empty prompt).
+   * Shows the editable logo prompt, waits for user input.
+   * If user types "cold" (case insensitive), plays the easter egg animation.
+   */
+  async _enterLogoEditMode() {
+    printEditableLogo();
+    const userText = await this._ask(`  \x1b[38;5;87m\x1b[1m☿ MERCURY \x1b[0m`);
+    const cleaned = userText.trim().toLowerCase();
+    if (cleaned === "cold") {
+      await playMercuryColdEasterEgg();
+    } else if (cleaned) {
+      // Show the user's custom text briefly
+      const E = "\x1b[", R = `${E}0m`, B = `${E}1m`, D = `${E}2m`;
+      const C = `${E}38;5;87m`;
+      console.log(`${C}${B}  ☿ MERCURY ${userText.trim().toUpperCase()}${R}`);
+      console.log(`${D}  (Nice try! But the secret word is... well, it's a secret.)${R}`);
+      console.log("");
+    } else {
+      printInfo("Logo edit cancelled.");
+    }
   }
 
   // ── Multiline input via $EDITOR ─────────────────────────────────────────
@@ -582,10 +656,22 @@ export class MercuryRepl {
   async _handleInput(input) {
     let trimmed = input.trim();
     if (!trimmed) {
+      // Easter egg: double-tap Enter on empty prompt triggers logo edit mode
+      const now = Date.now();
+      if (now - this._lastEmptyEnterTime < 500) {
+        this._lastEmptyEnterTime = 0;
+        await this._enterLogoEditMode();
+        this._rl.setPrompt(this._buildPrompt());
+        this._rl.prompt();
+        return;
+      }
+      this._lastEmptyEnterTime = now;
       this._rl.setPrompt(this._buildPrompt());
-    this._rl.prompt();
+      this._rl.prompt();
       return;
     }
+    // Reset empty-enter tracking on non-empty input
+    this._lastEmptyEnterTime = 0;
 
     // Backslash alone → open $EDITOR for multiline input
     if (trimmed === "\\") {
@@ -661,58 +747,106 @@ export class MercuryRepl {
       bash: "Bash", glob: "Glob", grep: "Grep", listdir: "ListDir",
       diff: "Diff", fetch: "Fetch", contextsearch: "ContextSearch",
       subagent: "SubAgent", subagentteam: "SubAgentTeam",
+      skill: "Skill",
     };
     const toolName = CANONICAL_NAMES[rawToolName.toLowerCase()] || rawToolName;
 
-    // Fetch: special handling — restrict by trust mode
-    if (toolName === "Fetch") {
-      const method = (args.method || "GET").toUpperCase();
-      // Detect query parameters in URL (data exfiltration risk)
-      const hasQuery = args.url && /\?[^#]/.test(args.url);
-      if (this.trustMode === TRUST_READONLY) {
-        if (method !== "GET") {
-          return { allowed: false, needsApproval: false, reason: `Read-only mode: only GET requests allowed (attempted ${method})` };
-        }
-        if (args.body) {
-          return { allowed: false, needsApproval: false, reason: "Read-only mode: request body not allowed" };
-        }
-        if (hasQuery) {
-          return { allowed: false, needsApproval: false, reason: "Read-only mode: URL query parameters not allowed (risk of data exfiltration)" };
-        }
+    // MCP tools: follow same rules as Bash (they execute external code)
+    const isMcpTool = toolName.startsWith("mcp__");
+
+    // ── dontAsk mode: deny everything not explicitly in READ_TOOLS ──
+    if (this.trustMode === TRUST_DONT_ASK) {
+      if (READ_TOOLS.has(toolName) || toolName === "ContextSearch") {
         return { allowed: true, needsApproval: false };
       }
-      // In approval mode, any "non-pure GET" requires approval:
-      //   method != GET, has query params, or has body → approval needed
-      if (this.trustMode === TRUST_APPROVAL) {
-        if (method !== "GET") {
-          return { allowed: true, needsApproval: true, reason: `Fetch ${method} requires approval` };
+      return { allowed: false, needsApproval: false, reason: `dontAsk mode: ${toolName} denied (not pre-approved)` };
+    }
+
+    // ── Readonly / Plan mode: only read tools ──
+    if (this.trustMode === TRUST_READONLY) {
+      if (READ_TOOLS.has(toolName) || toolName === "ContextSearch") {
+        return { allowed: true, needsApproval: false };
+      }
+      // Fetch: allow pure GET without query params
+      if (toolName === "Fetch") {
+        const method = (args.method || "GET").toUpperCase();
+        const hasQuery = args.url && /\?[^#]/.test(args.url);
+        if (method === "GET" && !args.body && !hasQuery) {
+          return { allowed: true, needsApproval: false };
         }
-        if (args.body) {
-          return { allowed: true, needsApproval: true, reason: "Fetch GET with body requires approval" };
-        }
-        if (hasQuery) {
-          return { allowed: true, needsApproval: true, reason: "Fetch with URL query parameters requires approval (data exfiltration risk)" };
+        return { allowed: false, needsApproval: false, reason: `Read-only mode: only pure GET requests allowed` };
+      }
+      // SubAgent: allow in readonly (they inherit readonly trust)
+      if (toolName === "SubAgent" || toolName === "SubAgentTeam") {
+        return { allowed: false, needsApproval: false, reason: "Read-only mode: sub-agents disabled" };
+      }
+      return { allowed: false, needsApproval: false, reason: `Read-only mode: ${toolName} blocked` };
+    }
+
+    // ── open mode: allow everything within workspace ──
+    if (this.trustMode === TRUST_OPEN) {
+      // Check workspace boundary for file operations
+      const filePath = args.file_path || args.path;
+      if (filePath && WRITE_TOOLS.has(toolName)) {
+        const inWorkspace = this._isInWorkspace(filePath);
+        if (!inWorkspace && !this.allowOutsideWorkspace) {
+          return { allowed: false, needsApproval: false, reason: `Outside workspace: ${path.resolve(filePath)}` };
         }
       }
       return { allowed: true, needsApproval: false };
     }
 
-    // Other read tools always allowed
+    // ── acceptEdits mode: auto-approve file edits, ask for Bash/Fetch ──
+    if (this.trustMode === TRUST_ACCEPT_EDITS) {
+      // Read tools always allowed
+      if (READ_TOOLS.has(toolName) || toolName === "ContextSearch") {
+        return { allowed: true, needsApproval: false };
+      }
+      // File edits auto-approved within workspace
+      if (WRITE_TOOLS.has(toolName)) {
+        const filePath = args.file_path || args.path;
+        if (filePath) {
+          const inWorkspace = this._isInWorkspace(filePath);
+          if (!inWorkspace && !this.allowOutsideWorkspace) {
+            return { allowed: true, needsApproval: true, reason: `File outside workspace: ${path.resolve(filePath)}` };
+          }
+        }
+        return { allowed: true, needsApproval: false }; // Auto-approve edits
+      }
+      // Bash, Fetch, MCP tools need approval
+      if (toolName === "Bash" || toolName === "Fetch" || isMcpTool) {
+        return { allowed: true, needsApproval: true, reason: null };
+      }
+      // SubAgent/AgentTeams: allowed
+      if (toolName === "SubAgent" || toolName === "SubAgentTeam" || toolName === "AgentTeams") {
+        return { allowed: true, needsApproval: false };
+      }
+      // Skill: allowed
+      if (toolName === "Skill") {
+        return { allowed: true, needsApproval: false };
+      }
+      return { allowed: true, needsApproval: true, reason: null };
+    }
+
+    // ── approval mode (default): ask for writes and commands ──
+    // Read tools always allowed
     if (READ_TOOLS.has(toolName) || toolName === "ContextSearch") {
       return { allowed: true, needsApproval: false };
     }
 
-    // SubAgent/SubAgentTeam: allowed except readonly
-    if (toolName === "SubAgent" || toolName === "SubAgentTeam") {
-      if (this.trustMode === TRUST_READONLY) {
-        return { allowed: false, needsApproval: false, reason: "Read-only mode: sub-agents disabled" };
+    // Fetch: special handling
+    if (toolName === "Fetch") {
+      const method = (args.method || "GET").toUpperCase();
+      const hasQuery = args.url && /\?[^#]/.test(args.url);
+      if (method !== "GET" || args.body || hasQuery) {
+        return { allowed: true, needsApproval: true, reason: `Fetch ${method} requires approval` };
       }
       return { allowed: true, needsApproval: false };
     }
 
-    // Readonly: block all writes and commands
-    if (this.trustMode === TRUST_READONLY) {
-      return { allowed: false, needsApproval: false, reason: `Read-only mode: ${toolName} blocked` };
+    // SubAgent/SubAgentTeam: need approval
+    if (toolName === "SubAgent" || toolName === "SubAgentTeam" || toolName === "AgentTeams") {
+      return { allowed: true, needsApproval: true, reason: null };
     }
 
     // Check workspace boundary for file operations (symlink-safe)
@@ -720,27 +854,25 @@ export class MercuryRepl {
     if (filePath && WRITE_TOOLS.has(toolName)) {
       const inWorkspace = this._isInWorkspace(filePath);
       if (!inWorkspace && !this.allowOutsideWorkspace) {
-        if (this.trustMode === TRUST_OPEN) {
-          return { allowed: false, needsApproval: false, reason: `Outside workspace: ${path.resolve(filePath)}` };
-        }
         return { allowed: true, needsApproval: true, reason: `File outside workspace: ${path.resolve(filePath)}` };
       }
     }
 
-    // Approval mode: tools that modify state require explicit user approval
-    if (this.trustMode === TRUST_APPROVAL) {
-      // Bash always needs approval (arbitrary command execution)
-      if (toolName === "Bash") {
-        return { allowed: true, needsApproval: true, reason: null };
-      }
-      // Write/Edit/Patch within workspace need approval (prevent unconfirmed file changes)
-      if (WRITE_TOOLS.has(toolName)) {
-        return { allowed: true, needsApproval: true, reason: null };
-      }
-      // SubAgent/SubAgentTeam need approval (prevent agent bypass of approval policy)
-      if (toolName === "SubAgent" || toolName === "SubAgentTeam" || toolName === "AgentTeams") {
-        return { allowed: true, needsApproval: true, reason: null };
-      }
+    // Bash always needs approval
+    if (toolName === "Bash") {
+      return { allowed: true, needsApproval: true, reason: null };
+    }
+    // Write/Edit/Patch need approval
+    if (WRITE_TOOLS.has(toolName)) {
+      return { allowed: true, needsApproval: true, reason: null };
+    }
+    // MCP tools need approval
+    if (isMcpTool) {
+      return { allowed: true, needsApproval: true, reason: null };
+    }
+    // Skill: allowed without approval
+    if (toolName === "Skill") {
+      return { allowed: true, needsApproval: false };
     }
 
     return { allowed: true, needsApproval: false };
@@ -823,9 +955,21 @@ export class MercuryRepl {
         const labsFiltered = TOOL_DEFINITIONS.filter((t) => labs.isToolAllowed(t.function.name));
 
         // Legacy ContextSearch toggle (kept for backwards compat, also gated by labs)
-        const activeTools = this.contextSearchEnabled
+        let activeTools = this.contextSearchEnabled
           ? labsFiltered
           : labsFiltered.filter((t) => t.function.name !== "ContextSearch");
+
+        // Add MCP tools
+        const mcpDefs = this.mcpManager.getToolDefinitions();
+        if (mcpDefs.length > 0) {
+          activeTools = [...activeTools, ...mcpDefs];
+        }
+
+        // Add Skill tool if skills are available
+        const skillDef = this.skillManager.getToolDefinition();
+        if (skillDef) {
+          activeTools = [...activeTools, skillDef];
+        }
 
         // In readonly mode, only allow read tools
         const permittedTools = this.trustMode === TRUST_READONLY
@@ -977,7 +1121,14 @@ export class MercuryRepl {
           let result, toolElapsed;
           try {
             const toolStart = Date.now();
-            result = await this.toolExecutor.execute(fnName.toLowerCase(), args);
+            // Route to appropriate executor
+            if (this.mcpManager.isMcpTool(fnName)) {
+              result = await this.mcpManager.executeTool(fnName, args);
+            } else if (fnName === "Skill") {
+              result = await this._executeSkill(args);
+            } else {
+              result = await this.toolExecutor.execute(fnName.toLowerCase(), args);
+            }
             toolElapsed = Date.now() - toolStart;
           } finally {
             // Always clear the one-time bypass flag — no persistent backdoor
@@ -1153,13 +1304,17 @@ export class MercuryRepl {
         const mode = parts[1]?.toLowerCase();
         if (!mode) {
           printInfo(`Trust: ${this._trustLabel(this.trustMode)}`);
+          printInfo(`Plan mode: ${this.planMode ? "ON" : "OFF"}`);
           printInfo(`Outside workspace: ${this.allowOutsideWorkspace ? "allowed" : "blocked"}`);
-          printInfo("Usage: /trust readonly|approval|open|outside");
+          printInfo("Usage: /trust readonly|approval|acceptedits|open|dontask|plan|outside");
           break;
         }
-        if (mode === "readonly" || mode === "1") this.trustMode = TRUST_READONLY;
-        else if (mode === "approval" || mode === "2") this.trustMode = TRUST_APPROVAL;
-        else if (mode === "open" || mode === "3") this.trustMode = TRUST_OPEN;
+        if (mode === "readonly" || mode === "1") { this.trustMode = TRUST_READONLY; this.planMode = false; }
+        else if (mode === "approval" || mode === "2") { this.trustMode = TRUST_APPROVAL; this.planMode = false; }
+        else if (mode === "acceptedits" || mode === "3") { this.trustMode = TRUST_ACCEPT_EDITS; this.planMode = false; }
+        else if (mode === "open" || mode === "4") { this.trustMode = TRUST_OPEN; this.planMode = false; }
+        else if (mode === "dontask" || mode === "5") { this.trustMode = TRUST_DONT_ASK; this.planMode = false; }
+        else if (mode === "plan") { this.trustMode = TRUST_READONLY; this.planMode = true; printPlanModeBanner(); }
         else if (mode === "outside") {
           this.allowOutsideWorkspace = !this.allowOutsideWorkspace;
           printInfo(`Outside workspace: ${this.allowOutsideWorkspace ? "allowed" : "blocked"}`);
@@ -1321,11 +1476,34 @@ export class MercuryRepl {
         printInfo(`Verbose logging: ${this.verbose ? "ON" : "OFF"}`);
         break;
 
+      case "/mcp":
+        await this._handleMcp(parts.slice(1));
+        break;
+
+      case "/skills":
+        this._handleSkills();
+        break;
+
       case "/exit":
         await this._gracefulExit();
         break;
 
       default:
+        // Check if it's a skill invocation: /skillname [args]
+        if (command.startsWith("/") && this.skillManager.has(command.slice(1))) {
+          const skillName = command.slice(1);
+          const skillArgs = parts.slice(1).join(" ");
+          const skill = this.skillManager.get(skillName);
+          const rendered = skill.render(skillArgs);
+          printInfo(`Running skill: ${skillName}`);
+          // Treat rendered prompt as user message
+          this.rollback.createCheckpoint(rendered, this.conversation.messages);
+          this.conversation.addUserMessage(rendered);
+          await this.log.append({ role: "user", content: `[Skill: /${skillName}] ${rendered}` });
+          this._toolTurnCount = 0;
+          try { await this._sendAndProcess(); } catch (err) { printError(`Error: ${err.message}`); }
+          break;
+        }
         printError(`Unknown command: ${cmd}. Type /help for commands.`);
     }
   }
@@ -1387,6 +1565,7 @@ export class MercuryRepl {
         ["supercompress", this.superCompress ? "ON" : "OFF"],
         ["contextsearch", this.contextSearchEnabled ? "ON" : "OFF"],
         ["labs", labs.enabled ? "ON" : "OFF"],
+        ["planet_logo", this.showPlanet ? "ON" : "OFF"],
       ];
       for (const [k, v] of rows) {
         console.log(`${G}  \u2502${R}  ${GR}${k.padEnd(15)}${R} ${D}${v}${R}`);
@@ -1428,6 +1607,7 @@ export class MercuryRepl {
         break;
       case "supercompress": this.superCompress = value === "true" || value === "on"; break;
       case "contextsearch": this.contextSearchEnabled = value === "true" || value === "on"; break;
+      case "planet_logo": this.showPlanet = value === "true" || value === "on"; break;
       default:
         printError(`Unknown setting: ${subCmd}`);
         return;
@@ -1500,6 +1680,62 @@ export class MercuryRepl {
     }
 
     printError(`Unknown sandbox option: ${subCmd}. Options: on, off, strict, subagents, network`);
+  }
+
+  // ── MCP management ──────────────────────────────────────────────────────
+
+  async _handleMcp(args) {
+    const subCmd = args[0]?.toLowerCase();
+
+    if (!subCmd || subCmd === "status") {
+      const servers = this.mcpManager.getStatus();
+      if (servers.length === 0) {
+        printInfo("No MCP servers configured.");
+        printInfo("Add .mercury/mcp.json or .mcp.json with mcpServers config.");
+      } else {
+        printMcpStatus(servers);
+      }
+      return;
+    }
+
+    if (subCmd === "reload") {
+      printInfo("Reloading MCP servers...");
+      await this.mcpManager.shutdown();
+      const result = await this.mcpManager.loadConfig(this.workspace, this._mcpConfigPath);
+      if (result.count > 0) {
+        printSuccess(`Loaded ${result.count} MCP server(s) from ${result.path}`);
+        printMcpStatus(this.mcpManager.getStatus());
+      } else {
+        printInfo("No MCP servers found.");
+      }
+      return;
+    }
+
+    printError(`Unknown /mcp option: ${subCmd}. Options: status, reload`);
+  }
+
+  // ── Skills management ─────────────────────────────────────────────────────
+
+  _handleSkills() {
+    if (this.skillManager.count === 0) {
+      printInfo("No skills found.");
+      printInfo("Create .mercury/skills/<name>.md with YAML frontmatter.");
+      return;
+    }
+    console.log(this.skillManager.formatList());
+  }
+
+  /**
+   * Execute a skill by name (called when model invokes the Skill tool).
+   */
+  async _executeSkill(args) {
+    const skillName = args.skill;
+    const skill = this.skillManager.get(skillName);
+    if (!skill) {
+      return `Error: Skill "${skillName}" not found. Available: ${this.skillManager.getAll().map(s => s.name).join(", ")}`;
+    }
+    const rendered = skill.render(args.args || "");
+    return `[Skill "${skillName}" prompt injected into conversation]\n\n${rendered}`;
   }
 
   // ── Agent management ─────────────────────────────────────────────────────
@@ -1691,7 +1927,11 @@ export class MercuryRepl {
 
     // Attempt copy to clipboard
     try {
-      const clip = process.platform === "darwin" ? "pbcopy" : "xclip -selection clipboard";
+      const clip = process.platform === "darwin"
+        ? "pbcopy"
+        : process.platform === "win32"
+          ? "clip"
+          : "xclip -selection clipboard";
       _execSync(clip, { input: last.content, timeout: 5000 });
       printSuccess(`Copied ${last.content.length} chars to clipboard.`);
     } catch {
@@ -1956,6 +2196,8 @@ export class MercuryRepl {
         printInfo("Session auto-saved.");
       } catch { /* non-critical */ }
     }
+    // Shutdown MCP servers
+    try { await this.mcpManager.shutdown(); } catch { /* non-critical */ }
     printInfo("Goodbye!");
     process.exit(0);
   }

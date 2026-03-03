@@ -1,5 +1,6 @@
 // Mercury Code - Terminal Display Module
-// Codex-style terminal UI with agent panel system
+// Mercury-themed terminal UI with agent panel system
+// ☿ Mercury — Silver, blue-teal, cyan palette
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -29,6 +30,14 @@ const CYAN = `${ESC}36m`;
 const WHITE = `${ESC}37m`;
 const GRAY = `${ESC}90m`;
 
+// True color (24-bit RGB) Mercury palette
+const rgb = (r, g, b) => `${ESC}38;2;${r};${g};${b}m`;
+const MERCURY_SILVER = rgb(192, 203, 215);   // Silver — the mercury metal
+const MERCURY_BLUE = rgb(86, 156, 214);      // Deep blue — Mercury's night sky
+const MERCURY_TEAL = rgb(78, 201, 176);      // Teal — core accent
+const MERCURY_CYAN = rgb(156, 220, 254);     // Light cyan — highlights
+const MERCURY_AMBER = rgb(206, 145, 120);    // Warm amber — accent
+
 // 256-color palette for gradients
 const fg256 = (n) => `${ESC}38;5;${n}m`;
 const bg256 = (n) => `${ESC}48;5;${n}m`;
@@ -41,52 +50,513 @@ function getTermWidth() {
   return process.stdout.columns || 80;
 }
 
-// ── ASCII Art Logo ───────────────────────────────────────────────────────────
+// ── Mercury Planet Art with Starfield ─────────────────────────────────────────
+// Realistic Mercury colors: gray-brown rocky surface with impact craters
+// Stars twinkle in deep space. Planet "appears" with an animation.
 
-const MERCURY_LOGO = [
-  "  ███╗   ███╗ ███████╗ ██████╗   ██████╗ ██╗   ██╗ ██████╗  ██╗   ██╗",
-  "  ████╗ ████║ ██╔════╝ ██╔══██╗ ██╔════╝ ██║   ██║ ██╔══██╗ ╚██╗ ██╔╝",
-  "  ██╔████╔██║ █████╗   ██████╔╝ ██║      ██║   ██║ ██████╔╝  ╚████╔╝ ",
-  "  ██║╚██╔╝██║ ██╔══╝   ██╔══██╗ ██║      ██║   ██║ ██╔══██╗   ╚██╔╝  ",
-  "  ██║ ╚═╝ ██║ ███████╗ ██║  ██║ ╚██████╗ ╚██████╔╝ ██║  ██║    ██║   ",
-  "  ╚═╝     ╚═╝ ╚══════╝ ╚═╝  ╚═╝  ╚═════╝  ╚═════╝  ╚═╝  ╚═╝    ╚═╝   ",
+// True-color planet surface palette (realistic Mercury: gray/brown/tan rock)
+const P_BRIGHT = rgb(195, 185, 170);   // Sunlit highlands
+const P_LIGHT  = rgb(170, 162, 148);   // Light terrain
+const P_MID    = rgb(145, 138, 125);   // Mid-tone surface
+const P_DARK   = rgb(115, 108, 98);    // Shadowed terrain
+const P_SHADOW = rgb(80, 75, 68);      // Deep shadow
+const P_CRATER = rgb(100, 95, 85);     // Crater interior
+const P_RIM    = rgb(165, 155, 140);   // Crater rim (bright)
+const P_EDGE   = rgb(60, 56, 50);      // Terminator / limb darkening
+
+// Space and stars
+const STAR_DIM    = rgb(90, 95, 120);    // Faint distant stars
+const STAR_MED    = rgb(160, 165, 195);  // Medium stars
+const STAR_BRIGHT = rgb(230, 235, 255);  // Bright stars
+const STAR_WARM   = rgb(255, 220, 180);  // Warm-tinted star
+const SPACE_FG    = rgb(15, 18, 30);     // Deep space
+
+// The Mercury scene — large planet filling the frame, with MERCURY text
+// overlaid ON TOP of the planet. Stars scattered across the deep space background.
+// The text appears to float in front of the planet surface.
+const MERCURY_SCENE = [
+  " .    ·     ✦   .  ·    ✧       ✦    .  ·    *    .   ✦    ·     .   ",
+  "   ✧     .       ·    ✦     .       ·    ✦   .    ·       ✧    .     ",
+  "  .  ·  ✦           ▄▄▄▓████████████▓▄▄▄          ✦  .  ·    ✧  .   ",
+  "    .        ▄▄▓█████▓▒░░░░░░░░░░░░░░▒▓█████▓▄▄        ·      .     ",
+  " ·  ✦    ▄▓███▒░░░░░░▒▓▒░░░░░░░░░░▓▒░░░░░░▒███▓▄   ✦     ·    ✧   ",
+  "  .    ▄██▓░░░░░▒▓███▓░░░░░▒▓▓▒░░░░░▓███▓▒░░░░░▓██▄   .    ✦  .    ",
+  "  ·  ▄██▒░░░▒▓██▓░░░░░░░░░░░░░░░░░░░░░░░▓██▓▒░░░▒██▄  ·     .     ",
+  " . ▄██░░░▒███▒░░░░ ███╗   ███╗ ███████╗ ░░░▒███▒░░░██▄ .  ✦   ·   ",
+  "  ▄██░░░▓██▒░░░░░░ ████╗ ████║ ██╔════╝ ░░░░▒██▓░░░░██▄     .     ",
+  " ███░░░██▓░░░░░▒▓░ ██╔████╔██║ █████╗   ░▒░░░░▓██░░░███  ✦   ·    ",
+  " ███░░░░░░░░░▒██▒░ ██║╚██╔╝██║ ██╔══╝   ░▒██░░░░░░░░███     .     ",
+  " ███░░▒▓░░░░██▓░░░ ██║ ╚═╝ ██║ ███████╗ ░░░▓██░░░░▓▒░███  ·   ✧  ",
+  " ███░░██▓░░░░░░░░░ ╚═╝     ╚═╝ ╚══════╝ ░░░░░░░▓██░░███     .     ",
+  "  ▀██░░▒██▓░░░░░░ ██████╗  ██████╗  ██████╗ ░░░▓██▒░░██▀  ✦   ·   ",
+  "  . ▀██░░░▒██▒░░░ ██╔════╝██╔═══██╗██╔══██╗ ░▒██▒░░░██▀ .   ✧     ",
+  "   · ▀██▒░░░▓██░░ ██║     ██║   ██║██║  ██║ ░██▓░░░▒██▀  ·    .   ",
+  "   .  ▀██▓░░░░▒█░ ╚██████╗╚██████╔╝██████╔╝ ░█▒░░░▓██▀  .  ✦      ",
+  "  ·  ✦  ▀███▓░░░░ .╚═════╝ ╚═════╝ ╚═════╝. ░░░▓███▀ ✦  ·    .   ",
+  "    .      ▀▓████▓▒░░░░░░░░░░░░░░░░░░░░▒▓████▓▀      .   ✧    ·   ",
+  "  ·  ✧  .     ▀▀▓█████▓▓▒░░░░░░░░▒▓▓█████▓▀▀    .  ✦  ·     .     ",
+  "    .   ✦    ·       ▀▀▀▓████████████▓▀▀▀      ·       ✦    .  ✧   ",
+  "   ✧     .       ·    ✦     .       ·    ✦   .    ·       ✧    .     ",
+  " .    ·     ✦   .  ·    ✧       ✦    .  ·    *    .   ✦    ·     .   ",
+];
+
+// Compact version for narrow terminals
+const MERCURY_COMPACT = [
+  "     ·  ✦  .  ·  ✦  ·  .  ✦  ·    ",
+  " ✦  .  ▄▓██████████▓▄  .  ✦  ·   ",
+  "·  . ▄██▒░░░░░░░░░░▒██▄ .  ✦     ",
+  " ✦  ██░░ ╔╦╗╔═╗╦═╗ ░░██  .  ·   ",
+  " .  ██░░ ║║║║╣ ╠╦╝ ░░░██ ·  ✦   ",
+  "·   ██░░ ╩ ╩╚═╝╩╚═ ░░░██  .  ·  ",
+  " ✦   ██▒░░░░░░░░░░░▒██  ✦ .  ·  ",
+  "·  .  ▀██▒░░░░░░░▒██▀  .  ·  ✦  ",
+  " ✦   .  ▀▓████████▓▀  ·  .  ✦   ",
+  "     ·  ✦  .  ·  ✦  ·  .  ✦  ·   ",
+];
+
+// Block letter characters used in MERCURY CODE text (box drawing + block chars)
+const TEXT_CHARS = new Set("╗╔║╚╝╠╣╩╦╬═─".split(""));
+
+/**
+ * Colorize a Mercury scene character with realistic planet/space colors.
+ * Block text characters (MERCURY CODE) get bright cyan glow to stand out.
+ * Planet surface uses realistic gray/brown Mercury tones.
+ */
+function _colorizeChar(ch, colInLine) {
+  switch (ch) {
+    // Stars
+    case "✦": return `${STAR_BRIGHT}${BOLD}✦${RESET}`;
+    case "✧": return `${STAR_WARM}✧${RESET}`;
+    case "*": return `${STAR_MED}*${RESET}`;
+    case "·": return `${STAR_DIM}·${RESET}`;
+    case ".": return `${rgb(45, 48, 65)}.${RESET}`;
+    // Planet surface — brightness depends on block character
+    case "█": return `${P_BRIGHT}█${RESET}`;
+    case "▓": return `${P_LIGHT}▓${RESET}`;
+    case "▒": return `${P_MID}▒${RESET}`;
+    case "░": return `${P_DARK}░${RESET}`;
+    // Planet edge/transition chars
+    case "▄": return `${P_EDGE}▄${RESET}`;
+    case "▀": return `${P_EDGE}▀${RESET}`;
+    // Space
+    case " ": return " ";
+    default:
+      // Block text characters (MERCURY CODE) — bright cyan glow
+      if (TEXT_CHARS.has(ch)) {
+        return `${MERCURY_CYAN}${BOLD}${ch}${RESET}`;
+      }
+      return `${P_SHADOW}${ch}${RESET}`;
+  }
+}
+
+/**
+ * Colorize an entire scene line.
+ */
+function _colorizeSceneLine(line) {
+  let result = "";
+  let col = 0;
+  for (const ch of line) {
+    result += _colorizeChar(ch, col++);
+  }
+  return result;
+}
+
+// Platform detection for display
+function getPlatformInfo() {
+  const p = process.platform;
+  const a = process.arch;
+  if (p === "darwin") return a === "arm64" ? "macOS (Apple Silicon)" : "macOS (Intel)";
+  if (p === "win32") return `Windows (${a})`;
+  return `Linux (${a})`;
+}
+
+// Classic text logo — MERCURY CODE on a starfield background
+// Each row is: [starfield_bg, text_overlay]
+// Stars use ·✦✧.* characters, text uses block letters
+const MERCURY_TEXT_SCENE = [
+  " .    ·     ✦   .  ·    ✧       ✦    .  ·    *    .   ✦    ·     .   ",
+  "   ✧     .       ·    ✦     .       ·    ✦   .    ·       ✧    .     ",
+  " ·  ✦ ███╗   ███╗ ███████╗ ██████╗   ██████╗ ██╗   ██╗ ██████╗  ██╗   ██╗",
+  "  .   ████╗ ████║ ██╔════╝ ██╔══██╗ ██╔════╝ ██║   ██║ ██╔══██╗ ╚██╗ ██╔╝",
+  " ✧  · ██╔████╔██║ █████╗   ██████╔╝ ██║  ✦   ██║   ██║ ██████╔╝  ╚████╔╝ ",
+  "  ✦   ██║╚██╔╝██║ ██╔══╝   ██╔══██╗ ██║      ██║   ██║ ██╔══██╗   ╚██╔╝  ",
+  "    . ██║ ╚═╝ ██║ ███████╗ ██║  ██║ ╚██████╗ ╚██████╔╝ ██║  ██║    ██║   ",
+  " ·  ✧ ╚═╝     ╚═╝ ╚══════╝ ╚═╝  ╚═╝  ╚═════╝  ╚═════╝  ╚═╝  ╚═╝    ╚═╝   ",
+  "    .      ·   ✦     .  ·     ✧   .    ✦  ·     .    ✧   ✦  .  ·     ",
+  " ✦    ·  ██████╗  ██████╗  ██████╗  ███████╗ ✧     .   ·     ✦   .   ",
+  "  .  ·  ██╔════╝ ██╔═══██╗██╔══██╗ ██╔════╝   ✦  .     ·    ✧    ·  ",
+  " ✧  ✦   ██║      ██║   ██║██║  ██║ █████╗  .       ·    ✦     .     ",
+  "  ·   .  ██║  ✧   ██║   ██║██║  ██║ ██╔══╝    ·  ✦   .    ·    ✧    ",
+  " .  ✦    ╚██████╗ ╚██████╔╝██████╔╝ ███████╗    .     ✦  ·     .    ",
+  "   ·   ✧  ╚═════╝  ╚═════╝ ╚═════╝  ╚══════╝  ·    ✧     .   ✦  ·  ",
+  "   ✧     .       ·    ✦     .       ·    ✦   .    ·       ✧    .     ",
+  " .    ·     ✦   .  ·    ✧       ✦    .  ·    *    .   ✦    ·     .   ",
+];
+
+// Shooting star frames — a meteor streaks across the starfield
+const SHOOTING_STAR_FRAMES = [
+  { row: 0, cols: [65, 64, 63], ch: "━─·" },
+  { row: 1, cols: [60, 59, 58], ch: "━─·" },
+  { row: 1, cols: [55, 54, 53], ch: "━─·" },
 ];
 
 // ── Display Functions ────────────────────────────────────────────────────────
 
 /**
- * Print the welcome banner with gradient ASCII art.
+ * Print the welcome banner.
+ * @param {object} [options]
+ * @param {boolean} [options.showPlanet=false] - Show Mercury planet scene (true = planet, false = classic text logo)
  */
-export async function printWelcome() {
+export async function printWelcome(options = {}) {
+  const showPlanet = options.showPlanet === true;
   const w = getTermWidth();
   const sep = "─".repeat(Math.min(w - 4, 68));
 
+  if (showPlanet) {
+    await _printPlanetWelcome(w, sep);
+  } else {
+    await _printClassicWelcome(w, sep);
+  }
+}
+
+/**
+ * Planet mode: Mercury planet with starfield, animated emergence.
+ */
+async function _printPlanetWelcome(w, sep) {
+  const useCompact = w < 76;
+  const scene = useCompact ? MERCURY_COMPACT : MERCURY_SCENE;
+  const totalLines = scene.length;
+
+  // Hide cursor during animation
+  process.stdout.write("\x1b[?25l");
   console.log("");
 
-  // Animated logo reveal — staggered gradient
-  for (let i = 0; i < MERCURY_LOGO.length; i++) {
-    const color = BRAND[i % BRAND.length];
-    console.log(`${color}${BOLD}${MERCURY_LOGO[i]}${RESET}`);
-    await _sleep(40); // Brief delay for visual effect
+  // ── Phase 1: Stars fade in (quick twinkle) ──
+  const starFrame = scene.map((line) =>
+    [...line].map((ch) => {
+      if ("█▓▒░▄▀".includes(ch)) return " ";
+      if (TEXT_CHARS.has(ch)) return " ";
+      return ch;
+    }).join("")
+  );
+
+  for (let i = 0; i < totalLines; i++) {
+    console.log(`  ${_colorizeSceneLine(starFrame[i])}`);
+  }
+  await _sleep(200);
+
+  // ── Phase 2: Planet emerges from center outward ──
+  const centerRow = Math.floor(totalLines / 2);
+
+  for (let radius = 0; radius <= centerRow; radius++) {
+    const rowsToReveal = new Set();
+    for (let i = 0; i < totalLines; i++) {
+      if (Math.abs(i - centerRow) <= radius) rowsToReveal.add(i);
+    }
+
+    process.stdout.write(`\x1b[${totalLines}A`);
+    for (let i = 0; i < totalLines; i++) {
+      const line = rowsToReveal.has(i) ? scene[i] : starFrame[i];
+      process.stdout.write(`  ${_colorizeSceneLine(line)}\x1b[K\n`);
+    }
+    await _sleep(45);
   }
 
+  await _sleep(120);
+  _printTitleBar(sep);
+  process.stdout.write("\x1b[?25h");
+}
+
+/**
+ * Classic mode: MERCURY CODE text on starfield, with shooting star & gradient reveal.
+ */
+async function _printClassicWelcome(w, sep) {
+  const useCompact = w < 72;
+  process.stdout.write("\x1b[?25l");
   console.log("");
-  console.log(`${fg256(30)}  ${sep}${RESET}`);
-  console.log(
-    `${BOLD}${fg256(87)}  Mercury Code${RESET} ${DIM}v${PKG_VERSION}${RESET}  ${GRAY}│${RESET}  ${DIM}Powered by Mercury-2 Diffusion Model${RESET}`
+
+  if (useCompact) {
+    // Simple compact header for narrow terminals
+    console.log(`${BOLD}${MERCURY_CYAN}  ☿ M E R C U R Y   C O D E${RESET}`);
+    console.log("");
+    _printTitleBar(sep);
+    process.stdout.write("\x1b[?25h");
+    return;
+  }
+
+  const scene = MERCURY_TEXT_SCENE;
+  const totalLines = scene.length;
+
+  // ── Phase 1: Stars appear first (text hidden) ──
+  const starOnly = scene.map((line) =>
+    [...line].map((ch) => {
+      if (TEXT_CHARS.has(ch) || "█".includes(ch)) return " ";
+      return ch;
+    }).join("")
   );
-  console.log(
-    `${DIM}  Inception Labs${RESET}         ${GRAY}│${RESET}  ${DIM}Type /help for commands, /exit to quit${RESET}`
-  );
-  console.log(
-    `${DIM}  ${GRAY}Shortcuts:${RESET} ${DIM}ESC×3${RESET} ${GRAY}rollback${RESET}  ${DIM}↓${RESET} ${GRAY}agents${RESET}  ${DIM}Ctrl+C${RESET} ${GRAY}interrupt${RESET}`
-  );
-  console.log(`${fg256(30)}  ${sep}${RESET}`);
+
+  for (let i = 0; i < totalLines; i++) {
+    console.log(`  ${_colorizeSceneLine(starOnly[i])}`);
+  }
+  await _sleep(250);
+
+  // ── Phase 2: Shooting star animation (streaks across top rows) ──
+  const meteorLine = " .    ·     ✦   .  ·    ✧       ✦    .  ·    *    .   ✦    ·     .   ";
+  for (const frame of SHOOTING_STAR_FRAMES) {
+    const starChars = [...meteorLine];
+    for (let j = 0; j < frame.cols.length && j < frame.ch.length; j++) {
+      const col = frame.cols[j];
+      if (col >= 0 && col < starChars.length) {
+        starChars[col] = frame.ch[j];
+      }
+    }
+    const meteorStr = starChars.join("");
+    // Overwrite just the target row
+    process.stdout.write(`\x1b[${totalLines - frame.row}A`);
+    process.stdout.write(`  ${_colorizeMeteorLine(meteorStr)}\x1b[K`);
+    process.stdout.write(`\x1b[${totalLines - frame.row}B\r`);
+    await _sleep(60);
+  }
+
+  await _sleep(100);
+
+  // ── Phase 3: Text reveals line by line with gradient colors ──
+  for (let i = 0; i < totalLines; i++) {
+    const hasText = scene[i].match(/[█╗╔║╚╝╠╣╩╦╬═]/);
+    if (hasText) {
+      // Move to this line and overwrite with full colored version
+      process.stdout.write(`\x1b[${totalLines - i}A`);
+      // Color the text characters with gradient, stars stay dim
+      const colored = _colorizeTextSceneLine(scene[i], i);
+      process.stdout.write(`  ${colored}\x1b[K`);
+      process.stdout.write(`\x1b[${totalLines - i}B\r`);
+      await _sleep(35);
+    }
+  }
+
+  await _sleep(100);
+  _printTitleBar(sep);
+  process.stdout.write("\x1b[?25h");
+}
+
+/**
+ * Colorize a scene line where MERCURY CODE text gets a gradient teal-cyan glow
+ * and stars stay their dim space colors.
+ */
+function _colorizeTextSceneLine(line, rowIdx) {
+  // Pick a gradient color based on row index
+  const textColor = BRAND[rowIdx % BRAND.length];
+  let result = "";
+  for (const ch of line) {
+    if (TEXT_CHARS.has(ch) || "█".includes(ch)) {
+      result += `${textColor}${BOLD}${ch}${RESET}`;
+    } else {
+      result += _colorizeChar(ch, 0);
+    }
+  }
+  return result;
+}
+
+/**
+ * Colorize a meteor line — the shooting star chars (━─) get bright white glow.
+ */
+function _colorizeMeteorLine(line) {
+  let result = "";
+  for (const ch of line) {
+    if (ch === "━") {
+      result += `${STAR_BRIGHT}${BOLD}━${RESET}`;
+    } else if (ch === "─") {
+      result += `${STAR_MED}─${RESET}`;
+    } else {
+      result += _colorizeChar(ch, 0);
+    }
+  }
+  return result;
+}
+
+/**
+ * Print the shared title/info bar below the logo/planet.
+ */
+function _printTitleBar(sep) {
   console.log("");
+  console.log(`${MERCURY_TEAL}  ${sep}${RESET}`);
+  console.log(
+    `${BOLD}${MERCURY_CYAN}  ☿ Mercury Code${RESET} ${DIM}v${PKG_VERSION}${RESET}  ${GRAY}│${RESET}  ${DIM}Powered by Mercury-2 Diffusion Model${RESET}`
+  );
+  console.log(
+    `${DIM}  Inception Labs${RESET}         ${GRAY}│${RESET}  ${DIM}${getPlatformInfo()} • Node ${process.versions.node}${RESET}`
+  );
+  console.log(
+    `${DIM}  ${GRAY}Type /help for commands, /exit to quit${RESET}`
+  );
+  console.log(
+    `${DIM}  ${GRAY}Shortcuts:${RESET} ${DIM}ESC×3${RESET} ${GRAY}rollback${RESET}  ${DIM}Ctrl+C${RESET} ${GRAY}interrupt${RESET}  ${DIM}Tab${RESET} ${GRAY}complete${RESET}`
+  );
+  console.log(`${MERCURY_TEAL}  ${sep}${RESET}`);
+  console.log("");
+}
+
+/**
+ * Print Plan mode banner (shown when --plan or /trust plan is active).
+ */
+export function printPlanModeBanner() {
+  const w = getTermWidth();
+  const inner = Math.min(w - 4, 68);
+  console.log("");
+  console.log(`${BOLD}${MERCURY_AMBER}  ╭─ Plan Mode ${"─".repeat(Math.max(0, inner - 13))}╮${RESET}`);
+  console.log(`${GRAY}  │${RESET}  ${MERCURY_AMBER}☿${RESET} ${BOLD}Read-only analysis mode${RESET}`);
+  console.log(`${GRAY}  │${RESET}  ${DIM}Mercury will create a plan file for your review.${RESET}`);
+  console.log(`${GRAY}  │${RESET}  ${DIM}No files will be modified. Use /trust approval to switch.${RESET}`);
+  console.log(`${BOLD}${MERCURY_AMBER}  ╰${"─".repeat(inner)}╯${RESET}`);
+  console.log("");
+}
+
+/**
+ * Print MCP server connection status.
+ * @param {Array<{name: string, ready: boolean, tools: number, transport: string}>} servers
+ */
+export function printMcpStatus(servers) {
+  if (!servers || servers.length === 0) return;
+
+  const w = getTermWidth();
+  const inner = Math.min(w - 4, 68);
+  console.log(`${BOLD}${fg256(87)}  ╭─ MCP Servers ${"─".repeat(Math.max(0, inner - 15))}╮${RESET}`);
+  for (const s of servers) {
+    const icon = s.ready ? `${GREEN}●${RESET}` : `${RED}○${RESET}`;
+    const toolCount = s.ready ? `${DIM}${s.tools} tool${s.tools !== 1 ? "s" : ""}${RESET}` : `${RED}not connected${RESET}`;
+    console.log(`${GRAY}  │${RESET}  ${icon} ${BOLD}${s.name}${RESET} ${GRAY}(${s.transport})${RESET}  ${toolCount}`);
+  }
+  console.log(`${BOLD}${fg256(87)}  ╰${"─".repeat(inner)}╯${RESET}`);
 }
 
 function _sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
+}
+
+// ── Easter Egg: MERCURY COLD ─────────────────────────────────────────────────
+// Triggered by double-tap Enter on empty prompt → editable logo → type "cold"
+// 谐音梗 (homophone pun): "code" → "cold" — Mercury's night side is −180 °C!
+
+const ICE_BLUE     = rgb(140, 200, 255);
+const ICE_BRIGHT   = rgb(200, 235, 255);
+const ICE_WHITE    = rgb(230, 245, 255);
+const FROST_DIM    = rgb(80, 130, 180);
+
+/**
+ * Show the editable logo prompt with a blinking cursor on "CODE".
+ * Returns a readline interface for capturing the user's replacement text.
+ */
+export function printEditableLogo() {
+  const w = getTermWidth();
+  const E = "\x1b[";
+
+  console.log("");
+  console.log(`${MERCURY_TEAL}  ╭─ Logo Edit Mode ─────────────────────────────────────╮${RESET}`);
+  console.log(`${GRAY}  │${RESET}  ${DIM}The logo text is now editable. Type a replacement.${RESET}`);
+  console.log(`${GRAY}  │${RESET}  ${MERCURY_CYAN}${BOLD}  ☿ MERCURY ${RESET}${ICE_BLUE}${BOLD}▊${RESET}${DIM} ← type here${RESET}`);
+  console.log(`${MERCURY_TEAL}  ╰─────────────────────────────────────────────────────╯${RESET}`);
+  console.log("");
+}
+
+/**
+ * Play the MERCURY COLD easter egg animation.
+ * Shows the text freezing over with ice crystals and a fun message.
+ */
+export async function playMercuryColdEasterEgg() {
+  process.stdout.write("\x1b[?25l"); // hide cursor
+  console.log("");
+
+  // Phase 1: "MERCURY COLD" title with frost effect
+  const coldText = [
+    " ███╗   ███╗ ███████╗ ██████╗   ██████╗ ██╗   ██╗ ██████╗  ██╗   ██╗",
+    " ████╗ ████║ ██╔════╝ ██╔══██╗ ██╔════╝ ██║   ██║ ██╔══██╗ ╚██╗ ██╔╝",
+    " ██╔████╔██║ █████╗   ██████╔╝ ██║      ██║   ██║ ██████╔╝  ╚████╔╝ ",
+    " ██║╚██╔╝██║ ██╔══╝   ██╔══██╗ ██║      ██║   ██║ ██╔══██╗   ╚██╔╝  ",
+    " ██║ ╚═╝ ██║ ███████╗ ██║  ██║ ╚██████╗ ╚██████╔╝ ██║  ██║    ██║   ",
+    " ╚═╝     ╚═╝ ╚══════╝ ╚═╝  ╚═╝  ╚═════╝  ╚═════╝  ╚═╝  ╚═╝    ╚═╝   ",
+    "",
+    "  ██████╗  ██████╗  ██╗     ██████╗ ",
+    " ██╔════╝ ██╔═══██╗ ██║     ██╔══██╗",
+    " ██║      ██║   ██║ ██║     ██║  ██║",
+    " ██║      ██║   ██║ ██║     ██║  ██║",
+    " ╚██████╗ ╚██████╔╝ ███████╗██████╔╝",
+    "  ╚═════╝  ╚═════╝  ╚══════╝╚═════╝ ",
+  ];
+
+  // Frost/ice particle characters
+  const frostChars = ["❄", "❅", "❆", "·", "✧", "°", "∗"];
+  const snowflakePositions = [];
+  for (let i = 0; i < 30; i++) {
+    snowflakePositions.push({
+      x: Math.floor(Math.random() * 72),
+      y: Math.floor(Math.random() * coldText.length),
+      ch: frostChars[Math.floor(Math.random() * frostChars.length)],
+    });
+  }
+
+  // Phase 1: frost particles appear
+  const frostFrame = Array(coldText.length).fill("").map(() =>
+    " ".repeat(72).split("")
+  );
+  for (const s of snowflakePositions) {
+    if (s.y < frostFrame.length && s.x < 72) {
+      frostFrame[s.y][s.x] = s.ch;
+    }
+  }
+  for (let i = 0; i < frostFrame.length; i++) {
+    const line = frostFrame[i].map(ch => {
+      if (ch === " ") return " ";
+      return `${FROST_DIM}${ch}${RESET}`;
+    }).join("");
+    console.log(`  ${line}`);
+  }
+  await _sleep(300);
+
+  // Phase 2: text fades in with icy gradient (line by line)
+  const iceGradient = [ICE_BRIGHT, ICE_BLUE, ICE_WHITE, ICE_BLUE, ICE_BRIGHT, FROST_DIM];
+
+  process.stdout.write(`\x1b[${coldText.length}A`);
+  for (let i = 0; i < coldText.length; i++) {
+    const color = iceGradient[i % iceGradient.length];
+    let line = "";
+    for (const ch of coldText[i]) {
+      if (TEXT_CHARS.has(ch) || "█".includes(ch)) {
+        line += `${color}${BOLD}${ch}${RESET}`;
+      } else if (ch === " ") {
+        // Check if frost particle at this position
+        const frostChar = frostFrame[i]?.[line.replace(/\x1b\[[0-9;]*m/g, "").length];
+        if (frostChar && frostChar !== " ") {
+          line += `${FROST_DIM}${frostChar}${RESET}`;
+        } else {
+          line += " ";
+        }
+      } else {
+        line += `${FROST_DIM}${ch}${RESET}`;
+      }
+    }
+    process.stdout.write(`  ${line}\x1b[K\n`);
+    await _sleep(50);
+  }
+
+  await _sleep(200);
+
+  // Phase 3: Fun message
+  console.log("");
+  console.log(`${ICE_BLUE}  ❄ ─────────────────────────────────────────────── ❄${RESET}`);
+  console.log("");
+  console.log(`${ICE_WHITE}${BOLD}    Brrr! 🥶 Mercury's night side: −180 °C${RESET}`);
+  console.log(`${FROST_DIM}    The closest planet to the Sun is also one of${RESET}`);
+  console.log(`${FROST_DIM}    the coldest places in the solar system!${RESET}`);
+  console.log("");
+  console.log(`${ICE_BLUE}${BOLD}    ☿ Mercury isn't just code — it's COLD. ❄️${RESET}`);
+  console.log("");
+  console.log(`${ICE_BLUE}  ❄ ─────────────────────────────────────────────── ❄${RESET}`);
+  console.log("");
+  await _sleep(800);
+  console.log(`${DIM}  ${GRAY}(Easter egg found! You discovered Mercury's secret.)${RESET}`);
+  console.log("");
+
+  process.stdout.write("\x1b[?25h"); // show cursor
 }
 
 /**
@@ -122,6 +592,8 @@ export function printHelp() {
       ["/supercompress", "Toggle aggressive compression"],
       ["/contextsearch", "Toggle context search tool"],
       ["/agents [cmd]", "list | create <name> — manage agents"],
+      ["/mcp [cmd]", "status | reload — manage MCP servers"],
+      ["/skills", "List available skills"],
     ]],
     ["Session", [
       ["/history [cmd]", "save | restore | list"],
@@ -229,8 +701,10 @@ export function printToolCall(name, args) {
     Read: "📖", Write: "📝", Edit: "✏️ ", Patch: "🔨", Bash: "⚡",
     Glob: "🔍", Grep: "🔎", ListDir: "📂", Diff: "📊", Fetch: "🌐",
     ContextSearch: "🔬", SubAgent: "🤖", SubAgentTeam: "👥",
+    AgentTeams: "👥", Lsp: "📐", AstSearch: "🌲", Skill: "⚗️",
   };
-  const icon = icons[name] || "🔧";
+  // MCP tools get a special plug icon
+  const icon = name.startsWith("mcp__") ? "🔌" : (icons[name] || "🔧");
 
   const summary = _formatToolArgs(name, args);
   const detail = summary ? ` ${DIM}${summary}${RESET}` : "";
@@ -276,7 +750,14 @@ function _formatToolArgs(name, args) {
         : "";
     case "SubAgentTeam":
       return args.tasks ? `${args.tasks.length} agent(s)` : "";
+    case "Skill":
+      return args.skill ? `/${args.skill}${args.args ? " " + args.args.slice(0, 30) : ""}` : "";
     default:
+      // MCP tools: show server + tool name
+      if (name.startsWith("mcp__")) {
+        const parts = name.split("__");
+        return parts.length >= 3 ? `${parts[1]}/${parts.slice(2).join("__")}` : name;
+      }
       return "";
   }
 }

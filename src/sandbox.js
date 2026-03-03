@@ -414,7 +414,10 @@ export class Sandbox {
       const wsResolved = path.resolve(this.workspace);
       const inWorkspace =
         resolved === wsResolved || resolved.startsWith(wsResolved + path.sep);
-      const inTmp = resolved.startsWith("/tmp" + path.sep) || resolved === "/tmp";
+      const tmpDir = process.platform === "win32"
+        ? (process.env.TEMP || process.env.TMP || "C:\\Temp")
+        : "/tmp";
+      const inTmp = resolved.startsWith(tmpDir + path.sep) || resolved === tmpDir;
 
       if (!inWorkspace && !inTmp) {
         return {

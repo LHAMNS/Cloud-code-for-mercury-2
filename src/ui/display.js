@@ -596,6 +596,7 @@ export function printHelp() {
       ["/skills", "List available skills"],
     ]],
     ["Session", [
+      ["/export [file]", "Export conversation to file (.md/.json/.txt/.html)"],
       ["/history [cmd]", "save | restore | list"],
       ["/context", "View context usage & stats"],
       ["/cost", "Show token usage & cost estimate"],

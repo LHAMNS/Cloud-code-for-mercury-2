@@ -163,6 +163,7 @@ export class MercuryRepl {
       "/agents", "/diff", "/compact", "/new", "/copy", "/init", "/labs",
       "/cost", "/doctor", "/bug", "/status", "/memory", "/model",
       "/undo", "/login", "/logout", "/verbose", "/mcp", "/skills",
+      "/export",
     ];
 
     this._rl = readline.createInterface({
@@ -1484,6 +1485,10 @@ export class MercuryRepl {
         this._handleSkills();
         break;
 
+      case "/export":
+        await this._handleExport(parts.slice(1));
+        break;
+
       case "/exit":
         await this._gracefulExit();
         break;
@@ -1723,6 +1728,215 @@ export class MercuryRepl {
       return;
     }
     console.log(this.skillManager.formatList());
+  }
+
+  // ── Export conversation ──────────────────────────────────────────────────
+
+  /**
+   * Export the full conversation history to a user-specified file.
+   * Usage: /export [filename]
+   * If no filename given, prompts the user.
+   * Supports: .json, .md, .txt, .html
+   */
+  async _handleExport(args) {
+    let filename = args.join(" ").trim();
+
+    if (!filename) {
+      printInfo("Export conversation to a file.");
+      printInfo("Specify a filename with extension (e.g. chat.md, log.json, notes.txt)");
+      filename = (await this._ask("  \x1b[38;5;87m\x1b[1mFilename:\x1b[0m ")).trim();
+      if (!filename) {
+        printInfo("Export cancelled.");
+        return;
+      }
+    }
+
+    // Resolve path relative to workspace
+    const filePath = path.resolve(this.workspace, filename);
+    const ext = path.extname(filename).toLowerCase();
+    const messages = this.conversation ? this.conversation.getMessages() : [];
+
+    if (messages.length === 0) {
+      printWarning("No conversation to export.");
+      return;
+    }
+
+    let content;
+    switch (ext) {
+      case ".json":
+        content = JSON.stringify({
+          exported: new Date().toISOString(),
+          session: this._sessionId,
+          workspace: this.workspace,
+          model: this.client.config.model,
+          messages: messages.map(m => ({
+            role: m.role,
+            content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+            ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
+            ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
+          })),
+        }, null, 2);
+        break;
+
+      case ".html":
+        content = this._exportAsHtml(messages);
+        break;
+
+      case ".md":
+        content = this._exportAsMarkdown(messages);
+        break;
+
+      default:
+        // .txt or any other extension — plain text
+        content = this._exportAsText(messages);
+        break;
+    }
+
+    try {
+      // Ensure parent directory exists
+      const dir = path.dirname(filePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(filePath, content, "utf-8");
+      const sizeKb = (Buffer.byteLength(content, "utf-8") / 1024).toFixed(1);
+      printSuccess(`Exported ${messages.length} messages to ${filePath} (${sizeKb} KB)`);
+    } catch (err) {
+      printError(`Export failed: ${err.message}`);
+    }
+  }
+
+  _exportAsMarkdown(messages) {
+    const lines = [];
+    lines.push(`# Mercury Code — Conversation Export`);
+    lines.push(`> Exported: ${new Date().toISOString()}`);
+    lines.push(`> Session: ${this._sessionId}`);
+    lines.push(`> Model: ${this.client.config.model}`);
+    lines.push(`> Workspace: ${this.workspace}`);
+    lines.push("");
+    lines.push("---");
+    lines.push("");
+
+    for (const msg of messages) {
+      if (msg.role === "system") {
+        lines.push("## System Prompt");
+        lines.push("");
+        const text = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
+        lines.push("<details><summary>System prompt (click to expand)</summary>");
+        lines.push("");
+        lines.push("```");
+        lines.push(text.slice(0, 2000) + (text.length > 2000 ? "\n... (truncated)" : ""));
+        lines.push("```");
+        lines.push("</details>");
+        lines.push("");
+      } else if (msg.role === "user") {
+        lines.push("### User");
+        lines.push("");
+        lines.push(typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content));
+        lines.push("");
+      } else if (msg.role === "assistant") {
+        lines.push("### Mercury");
+        lines.push("");
+        if (typeof msg.content === "string") {
+          lines.push(msg.content);
+        } else if (msg.content === null && msg.tool_calls) {
+          for (const tc of msg.tool_calls) {
+            const argStr = typeof tc.function.arguments === "string"
+              ? tc.function.arguments
+              : JSON.stringify(tc.function.arguments);
+            lines.push(`**Tool call:** \`${tc.function.name}\``);
+            lines.push("```json");
+            lines.push(argStr.length > 500 ? argStr.slice(0, 500) + "..." : argStr);
+            lines.push("```");
+          }
+        }
+        lines.push("");
+      } else if (msg.role === "tool") {
+        lines.push(`**Tool result** (\`${msg.tool_call_id || "?"}\`):`);
+        const text = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
+        lines.push("```");
+        lines.push(text.length > 1000 ? text.slice(0, 1000) + "\n... (truncated)" : text);
+        lines.push("```");
+        lines.push("");
+      }
+    }
+    return lines.join("\n");
+  }
+
+  _exportAsText(messages) {
+    const lines = [];
+    lines.push(`Mercury Code — Conversation Export`);
+    lines.push(`Exported: ${new Date().toISOString()}`);
+    lines.push(`Session: ${this._sessionId}`);
+    lines.push(`Model: ${this.client.config.model}`);
+    lines.push(`Workspace: ${this.workspace}`);
+    lines.push("=".repeat(60));
+    lines.push("");
+
+    for (const msg of messages) {
+      if (msg.role === "system") continue; // Skip system prompt in text export
+      const label = msg.role === "user" ? "USER" : msg.role === "assistant" ? "MERCURY" : "TOOL";
+      lines.push(`[${label}]`);
+      if (typeof msg.content === "string") {
+        lines.push(msg.content);
+      } else if (msg.content === null && msg.tool_calls) {
+        for (const tc of msg.tool_calls) {
+          lines.push(`  → ${tc.function.name}(${typeof tc.function.arguments === "string" ? tc.function.arguments.slice(0, 200) : "..."})`);
+        }
+      } else {
+        lines.push(JSON.stringify(msg.content));
+      }
+      lines.push("");
+    }
+    return lines.join("\n");
+  }
+
+  _exportAsHtml(messages) {
+    const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const lines = [];
+    lines.push("<!DOCTYPE html>");
+    lines.push("<html><head><meta charset='utf-8'>");
+    lines.push("<title>Mercury Code — Conversation Export</title>");
+    lines.push("<style>");
+    lines.push("body{font-family:system-ui,-apple-system,sans-serif;max-width:800px;margin:0 auto;padding:2em;background:#0d1117;color:#c9d1d9}");
+    lines.push(".msg{margin:1em 0;padding:1em;border-radius:8px;border-left:3px solid}");
+    lines.push(".user{border-color:#58a6ff;background:#161b22}");
+    lines.push(".assistant{border-color:#3fb950;background:#161b22}");
+    lines.push(".tool{border-color:#d29922;background:#161b22;font-size:0.9em}");
+    lines.push(".role{font-weight:bold;font-size:0.85em;text-transform:uppercase;margin-bottom:0.5em}");
+    lines.push(".user .role{color:#58a6ff}");
+    lines.push(".assistant .role{color:#3fb950}");
+    lines.push(".tool .role{color:#d29922}");
+    lines.push("pre{background:#0d1117;padding:0.5em;border-radius:4px;overflow-x:auto;font-size:0.85em}");
+    lines.push("h1{color:#58a6ff}");
+    lines.push(".meta{color:#8b949e;font-size:0.8em}");
+    lines.push("</style></head><body>");
+    lines.push(`<h1>☿ Mercury Code</h1>`);
+    lines.push(`<p class="meta">Exported: ${new Date().toISOString()} | Session: ${esc(this._sessionId)} | Model: ${esc(this.client.config.model)}</p>`);
+    lines.push("<hr>");
+
+    for (const msg of messages) {
+      if (msg.role === "system") continue;
+      const cls = msg.role;
+      const label = msg.role === "user" ? "User" : msg.role === "assistant" ? "Mercury" : "Tool";
+      lines.push(`<div class="msg ${cls}">`);
+      lines.push(`<div class="role">${label}</div>`);
+
+      if (typeof msg.content === "string") {
+        lines.push(`<div>${esc(msg.content).replace(/\n/g, "<br>")}</div>`);
+      } else if (msg.content === null && msg.tool_calls) {
+        for (const tc of msg.tool_calls) {
+          const argStr = typeof tc.function.arguments === "string"
+            ? tc.function.arguments : JSON.stringify(tc.function.arguments);
+          lines.push(`<div><strong>${esc(tc.function.name)}</strong></div>`);
+          lines.push(`<pre>${esc(argStr.slice(0, 500))}</pre>`);
+        }
+      }
+      lines.push("</div>");
+    }
+
+    lines.push("</body></html>");
+    return lines.join("\n");
   }
 
   /**

@@ -51,6 +51,14 @@
 - **Plan mode banner**: Amber-styled read-only analysis mode indicator
 - **Tool icons**: Custom icons for Skill, MCP, AgentTeams, LSP, and AstSearch tools
 
+### Conversation Export
+- **`/export [filename]`**: Export full conversation history to a file
+  - Supported formats: `.md` (Markdown), `.json` (structured JSON), `.txt` (plain text), `.html` (styled HTML)
+  - If no filename provided, interactively prompts the user
+  - Markdown export includes system prompt (collapsed), user/assistant messages, and tool calls
+  - HTML export features dark-themed GitHub-style styling
+  - JSON export includes full metadata (session ID, model, workspace, timestamps)
+
 ### Easter Egg
 - **Double-tap Enter** on empty prompt to enter logo edit mode
 - **Type "cold"** to discover Mercury's secret (谐音梗: code → cold, Mercury's night side is −180°C!)

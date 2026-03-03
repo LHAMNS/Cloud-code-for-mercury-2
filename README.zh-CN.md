@@ -12,6 +12,12 @@ Mercury Code 是一个在终端中运行的 AI 编程代理，它可以代你读
 
 - [系统要求](#系统要求)
 - [获取 API 密钥](#获取-api-密钥)
+  - [第一步：打开 Inception Labs 平台](#第一步打开-inception-labs-平台)
+  - [第二步：创建账号（新用户）](#第二步创建账号新用户)
+  - [第三步：登录（已有账号）](#第三步登录已有账号)
+  - [第四步：进入 API Keys 页面](#第四步进入-api-keys-页面)
+  - [第五步：创建新的 API 密钥](#第五步创建新的-api-密钥)
+  - [第六步：查看你的计划和用量限制](#第六步查看你的计划和用量限制)
 - [安装](#安装)
   - [方式一：一键安装脚本（推荐）](#方式一一键安装脚本推荐)
   - [方式二：克隆仓库并通过 npm 全局安装](#方式二克隆仓库并通过-npm-全局安装)
@@ -19,6 +25,13 @@ Mercury Code 是一个在终端中运行的 AI 编程代理，它可以代你读
   - [方式四：直接运行（无需安装）](#方式四直接运行无需安装)
 - [验证安装](#验证安装)
 - [设置 API 密钥](#设置-api-密钥)
+  - [方式 A：`/login` 命令（最简单）](#方式-a通过内置-login-命令设置最简单)
+  - [方式 B：临时设置——仅当前会话](#方式-b临时设置仅当前终端会话有效)
+  - [方式 C：永久设置——Shell 配置文件（推荐）](#方式-c永久设置写入-shell-配置文件推荐)
+  - [方式 D：使用 `.env` 文件](#方式-d使用-env-文件适合按项目管理)
+  - [方式 E：内联方式——单条命令](#方式-e内联方式单条命令适合脚本--ci)
+  - [验证 API 连通性](#验证-api-连通性)
+  - [安全最佳实践](#安全最佳实践)
 - [更新](#更新)
 - [卸载](#卸载)
 - [使用方法](#使用方法)
@@ -85,12 +98,67 @@ node --version
 
 ## 获取 API 密钥
 
-1. 访问 **[https://api.inceptionlabs.ai](https://api.inceptionlabs.ai)**。
-2. 注册或登录。
-3. 进入 API Keys 页面，创建一个新密钥。
-4. 复制密钥——下一步会用到。
+Mercury Code 通过 Inception Labs 的 API 连接 **Mercury-2** 模型。在使用 Mercury Code 之前，你必须先在 Inception Labs 平台上创建一个免费账号并生成 API 密钥。
 
-> **重要提示：** 请妥善保管你的 API 密钥。不要将其提交到版本控制中，不要公开分享。
+### 第一步：打开 Inception Labs 平台
+
+在浏览器中访问 **[https://api.inceptionlabs.ai](https://api.inceptionlabs.ai)**。这是 Inception Labs 的官方开发者门户，你可以在这里管理账号、API 密钥和使用量。
+
+### 第二步：创建账号（新用户）
+
+如果你还没有账号：
+
+1. 点击 **"Sign Up"**（注册）按钮（或 "Get Started" / "Register"）。
+2. 输入你的**电子邮箱地址**，设置一个**密码**。
+3. 你也可能可以使用 Google 或 GitHub 账号直接注册——选择最方便的方式即可。
+4. 检查你的邮箱收件箱，查找来自 Inception Labs 的**验证邮件**。
+5. 点击邮件中的验证链接以激活你的账号。
+6. 返回 [https://api.inceptionlabs.ai](https://api.inceptionlabs.ai)，使用新注册的凭据登录。
+
+> **提示：** 如果几分钟后仍未收到验证邮件，请检查你的垃圾邮件/广告邮件文件夹。某些企业邮件系统可能会延迟投递。
+
+### 第三步：登录（已有账号）
+
+如果你已经有账号，直接点击 **"Log In"**（登录），输入邮箱和密码（或使用关联的 Google/GitHub 账号）。
+
+### 第四步：进入 API Keys 页面
+
+登录后：
+
+1. 在控制面板或侧边栏导航中找到 **"API Keys"**（API 密钥）、**"Keys"**（密钥）或 **"Credentials"**（凭据）部分。
+2. 点击进入 API 密钥管理页面。
+
+### 第五步：创建新的 API 密钥
+
+1. 点击 **"Create Key"**（创建密钥）按钮（或 "Generate New Key" / "+ New Key"）。
+2. 为密钥填写一个可选的**名称**或**描述**（例如 "Mercury Code - 我的笔记本电脑"）——如果你之后创建多个密钥，名称可以帮助你区分它们。
+3. 点击 **"Create"**（创建）/ **"Generate"**（生成）。
+4. 你的新 API 密钥将**只显示一次**。它看起来类似：
+
+   ```
+   inc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+   ```
+
+5. **立即复制密钥**并保存到安全的地方（例如密码管理器）。大多数平台在你离开页面后将不再显示完整的密钥。
+
+> **重要提示——请妥善保管你的 API 密钥：**
+> - **不要**将其提交到 git 或任何版本控制系统中。
+> - **不要**将其粘贴在公开论坛、聊天消息或截图中。
+> - **不要**与他人共享——每个人应该创建自己的密钥。
+> - 如果怀疑密钥已泄露，请立即在 API Keys 页面吊销（Revoke）该密钥，并创建新的密钥。
+
+### 第六步：查看你的计划和用量限制
+
+在 Inception Labs 的控制面板中，你通常可以找到：
+
+| 信息 | 在哪里查看 |
+|---|---|
+| **当前计划** | Dashboard（控制面板）或 Billing（账单）部分——显示你是免费套餐还是付费计划。 |
+| **速率限制** | API 文档或计划详情——显示每分钟/每小时可以发送多少请求。 |
+| **使用历史** | Usage（使用量）或 Analytics（分析）部分——显示你已消耗多少 Token。 |
+| **账单** | Billing（账单）部分——管理支付方式和查看发票。 |
+
+请关注你的使用量，以免触发速率限制（HTTP 429 错误）。
 
 ---
 
@@ -194,37 +262,127 @@ mercury-code -p "Hello, Mercury!"
 
 ## 设置 API 密钥
 
-Mercury Code 需要 `INCEPTION_API_KEY` 环境变量来与 Mercury-2 API 通信。
+Mercury Code 需要 `INCEPTION_API_KEY` 环境变量来与 Mercury-2 API 通信。根据你的需求，有多种配置方式可选。
 
-### 临时设置（仅当前终端会话有效）
+### 方式 A：通过内置 `/login` 命令设置（最简单）
+
+Mercury Code 内置了一个交互式命令，让你直接设置 API 密钥：
 
 ```bash
-export INCEPTION_API_KEY=your_key_here
+mercury-code
+# REPL 启动后，输入：
+/login
+# 按照提示粘贴你的 API 密钥
+```
+
+密钥会存储在 Mercury Code 的内部配置中。不过，如果你要使用单次提问模式（`mercury-code -p "..."`），仍然建议设置环境变量。
+
+### 方式 B：临时设置——仅当前终端会话有效
+
+如果你只是想快速试用 Mercury Code，可以在当前终端中 export 变量。关闭终端后密钥会消失：
+
+```bash
+export INCEPTION_API_KEY=inc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 mercury-code
 ```
 
-### 永久设置（推荐）
+将 `inc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx` 替换为你在 Inception Labs 控制面板获取的实际 API 密钥。
 
-将 export 命令添加到 shell 配置文件中，使其在所有会话中持续生效：
+### 方式 C：永久设置——写入 Shell 配置文件（推荐）
 
-**Bash** (`~/.bashrc` 或 `~/.bash_profile`)：
+要让 API 密钥在每次打开终端时都可用，将其添加到 shell 配置文件中。
+
+**第一步：** 确定你使用的是哪个 Shell：
+
 ```bash
-echo 'export INCEPTION_API_KEY=your_key_here' >> ~/.bashrc
+echo $SHELL
+# 常见输出: /bin/bash, /bin/zsh, /usr/bin/fish
+```
+
+**第二步：** 将 export 添加到对应的文件：
+
+**Bash** 用户（`~/.bashrc` 或 `~/.bash_profile`）：
+```bash
+# 用编辑器打开文件，或用 echo 追加：
+echo 'export INCEPTION_API_KEY=inc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' >> ~/.bashrc
+
+# 重新加载文件使其立即生效：
 source ~/.bashrc
 ```
 
-**Zsh** (`~/.zshrc`)：
+> **注意：** 在 macOS 上，bash 在登录时读取 `~/.bash_profile`。如果你使用 macOS + bash，请添加到 `~/.bash_profile` 而不是 `~/.bashrc`。
+
+**Zsh** 用户（`~/.zshrc`）——macOS 默认 Shell：
 ```bash
-echo 'export INCEPTION_API_KEY=your_key_here' >> ~/.zshrc
+echo 'export INCEPTION_API_KEY=inc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-**Fish** (`~/.config/fish/config.fish`)：
+**Fish** 用户（`~/.config/fish/config.fish`）：
 ```fish
-set -Ux INCEPTION_API_KEY your_key_here
+set -Ux INCEPTION_API_KEY inc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-> **安全提示：** 不要将 API 密钥放在被 git 追踪的文件中。`.gitignore` 已排除 `.env` 文件。如果你偏好使用 `.env` 方式，请在项目目录创建 `.env` 文件并手动 source——Mercury Code 不会自动加载 `.env` 文件。
+Fish 的 `set -Ux` 会使变量成为通用的且持久化的，自动在所有会话中生效——不需要 source 任何文件。
+
+**第三步：** 验证密钥是否已设置：
+
+```bash
+echo $INCEPTION_API_KEY
+# 应该打印出你的密钥: inc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+### 方式 D：使用 `.env` 文件（适合按项目管理）
+
+如果你偏好按项目管理环境变量：
+
+```bash
+# 1. 在项目目录中创建 .env 文件
+echo 'INCEPTION_API_KEY=inc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' > .env
+
+# 2. 运行 Mercury Code 前先 source 它
+source .env && mercury-code
+```
+
+> **注意：** Mercury Code **不会**自动加载 `.env` 文件。你必须手动 `source` 它，或使用 [direnv](https://direnv.net/) 之类的工具在你 `cd` 进入项目目录时自动加载 `.env` 文件。
+
+`.gitignore` 已经排除了 `.env` 文件，所以你的密钥不会被意外提交。
+
+### 方式 E：内联方式——单条命令（适合脚本 / CI）
+
+你可以在单条命令中内联传递密钥，而无需 export：
+
+```bash
+INCEPTION_API_KEY=inc_xxxx mercury-code -p "Hello, Mercury!"
+```
+
+这只为该条命令设置变量，不会持久化。
+
+### 验证 API 连通性
+
+设置好密钥后，测试 Mercury Code 是否能连接到 API：
+
+```bash
+# 快速测试
+mercury-code -p "用一句话打个招呼"
+
+# 或者使用内置诊断工具
+mercury-code
+# 然后在 REPL 中输入：
+/doctor
+```
+
+`/doctor` 命令会一次性检查你的 Node.js 版本、API 密钥和网络连通性。
+
+### 安全最佳实践
+
+| 应该做 | 不应该做 |
+|---|---|
+| 将密钥存储在 shell 配置文件或密码管理器中 | 将密钥提交到 git |
+| 使用被 gitignore 的 `.env` 文件 | 在公开聊天或论坛中粘贴密钥 |
+| 为不同的机器创建不同的密钥 | 多人共用一个密钥 |
+| 发现密钥泄露时立即在控制面板吊销 | 让旧的/未使用的密钥保持激活状态 |
+| 在 Mercury Code 中使用 `/logout` 移除已存储的密钥 | 在源代码文件中硬编码密钥 |
 
 ---
 

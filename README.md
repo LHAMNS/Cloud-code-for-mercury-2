@@ -12,6 +12,12 @@ Mercury Code is a terminal-based AI agent that reads, writes, and edits code on 
 
 - [Requirements](#requirements)
 - [Getting an API Key](#getting-an-api-key)
+  - [Step 1: Open the Inception Labs Platform](#step-1-open-the-inception-labs-platform)
+  - [Step 2: Create an Account (New Users)](#step-2-create-an-account-new-users)
+  - [Step 3: Log In (Existing Users)](#step-3-log-in-existing-users)
+  - [Step 4: Navigate to the API Keys Page](#step-4-navigate-to-the-api-keys-page)
+  - [Step 5: Create a New API Key](#step-5-create-a-new-api-key)
+  - [Step 6: Check Your Plan and Usage Limits](#step-6-check-your-plan-and-usage-limits)
 - [Installation](#installation)
   - [Method 1: One-Line Install Script (Recommended)](#method-1-one-line-install-script-recommended)
   - [Method 2: Clone and Install Globally via npm](#method-2-clone-and-install-globally-via-npm)
@@ -19,6 +25,13 @@ Mercury Code is a terminal-based AI agent that reads, writes, and edits code on 
   - [Method 4: Run Directly Without Installing](#method-4-run-directly-without-installing)
 - [Verifying the Installation](#verifying-the-installation)
 - [Setting the API Key](#setting-the-api-key)
+  - [Option A: `/login` Command (Easiest)](#option-a-set-via-the-built-in-login-command-easiest)
+  - [Option B: Temporary — Current Session](#option-b-temporary--current-shell-session-only)
+  - [Option C: Permanent — Shell Profile (Recommended)](#option-c-permanent--add-to-shell-profile-recommended)
+  - [Option D: Using a `.env` File](#option-d-using-a-env-file-for-project-based-workflows)
+  - [Option E: Inline — Single Command](#option-e-inline--single-command-for-scripts--ci)
+  - [Verifying API Connectivity](#verifying-api-connectivity)
+  - [Security Best Practices](#security-best-practices)
 - [Updating](#updating)
 - [Uninstalling](#uninstalling)
 - [Usage](#usage)
@@ -85,12 +98,67 @@ If Node.js is not installed or the version is too old, install or upgrade it usi
 
 ## Getting an API Key
 
-1. Go to **[https://api.inceptionlabs.ai](https://api.inceptionlabs.ai)**.
-2. Sign up or log in.
-3. Navigate to the API Keys section and create a new key.
-4. Copy the key — you will need it in the next step.
+Mercury Code connects to the **Mercury-2** model through the Inception Labs API. Before you can use Mercury Code, you must create a free account on the Inception Labs platform and generate an API key.
 
-> **Important:** Keep your API key secret. Do not commit it to version control. Do not share it publicly.
+### Step 1: Open the Inception Labs Platform
+
+Go to **[https://api.inceptionlabs.ai](https://api.inceptionlabs.ai)** in your browser. This is the official Inception Labs developer portal where you manage your account, API keys, and usage.
+
+### Step 2: Create an Account (New Users)
+
+If you do not have an account yet:
+
+1. Click **"Sign Up"** (or "Get Started" / "Register").
+2. Enter your **email address** and choose a **password**.
+3. You may also be able to sign up with a Google or GitHub account — use whichever method is most convenient.
+4. Check your email inbox for a **verification email** from Inception Labs.
+5. Click the verification link in the email to activate your account.
+6. Return to [https://api.inceptionlabs.ai](https://api.inceptionlabs.ai) and log in with your new credentials.
+
+> **Tip:** If the verification email does not appear within a few minutes, check your spam/junk folder. Some corporate email systems may delay delivery.
+
+### Step 3: Log In (Existing Users)
+
+If you already have an account, simply click **"Log In"** and enter your email and password (or use your linked Google/GitHub account).
+
+### Step 4: Navigate to the API Keys Page
+
+Once logged in:
+
+1. Look for a section called **"API Keys"**, **"Keys"**, or **"Credentials"** in the dashboard or sidebar navigation.
+2. Click on it to open the API key management page.
+
+### Step 5: Create a New API Key
+
+1. Click the **"Create Key"** (or "Generate New Key" / "+ New Key") button.
+2. Give your key an optional **name** or **description** (e.g., "Mercury Code - My Laptop") — this helps you identify the key later if you create multiple keys.
+3. Click **"Create"** / **"Generate"**.
+4. Your new API key will be displayed **once**. It will look something like:
+
+   ```
+   inc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+   ```
+
+5. **Copy the key immediately** and save it somewhere safe (e.g., a password manager). Most platforms will not show the full key again after you leave the page.
+
+> **Important — Keep your API key secret:**
+> - Do **not** commit it to git or any version control system.
+> - Do **not** paste it in public forums, chat messages, or screenshots.
+> - Do **not** share it with others — each person should create their own key.
+> - If you suspect your key has been compromised, revoke it immediately on the API Keys page and create a new one.
+
+### Step 6: Check Your Plan and Usage Limits
+
+On the Inception Labs dashboard you can typically find:
+
+| Information | Where to Find |
+|---|---|
+| **Current plan** | Dashboard or Billing section — shows whether you are on a free tier or paid plan. |
+| **Rate limits** | API docs or plan details — shows how many requests per minute/hour you can make. |
+| **Usage history** | Usage or Analytics section — shows how many tokens you have consumed. |
+| **Billing** | Billing section — manage payment methods and view invoices. |
+
+Keep an eye on your usage to avoid hitting rate limits (HTTP 429 errors).
 
 ---
 
@@ -194,37 +262,127 @@ If `mercury-code` is not found, see [Troubleshooting: command not found](#mercur
 
 ## Setting the API Key
 
-Mercury Code requires the `INCEPTION_API_KEY` environment variable to communicate with the Mercury-2 API.
+Mercury Code requires the `INCEPTION_API_KEY` environment variable to communicate with the Mercury-2 API. There are several ways to configure it depending on your needs.
 
-### Temporary (current shell session only)
+### Option A: Set via the Built-in `/login` Command (Easiest)
+
+Mercury Code has a built-in command that lets you set the API key interactively:
 
 ```bash
-export INCEPTION_API_KEY=your_key_here
+mercury-code
+# Once the REPL starts, type:
+/login
+# Follow the prompt to paste your API key
+```
+
+This stores the key in Mercury Code's internal configuration. However, you will still benefit from setting the environment variable for single-shot mode (`mercury-code -p "..."`).
+
+### Option B: Temporary — Current Shell Session Only
+
+If you just want to try Mercury Code quickly, export the variable in your current terminal. The key will be forgotten when you close the terminal:
+
+```bash
+export INCEPTION_API_KEY=inc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 mercury-code
 ```
 
-### Permanent (recommended)
+Replace `inc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx` with your actual API key from the Inception Labs dashboard.
 
-Add the export to your shell profile so it persists across sessions:
+### Option C: Permanent — Add to Shell Profile (Recommended)
 
-**Bash** (`~/.bashrc` or `~/.bash_profile`):
+To make the API key available every time you open a terminal, add it to your shell configuration file.
+
+**Step 1:** Determine which shell you are using:
+
 ```bash
-echo 'export INCEPTION_API_KEY=your_key_here' >> ~/.bashrc
+echo $SHELL
+# Common outputs: /bin/bash, /bin/zsh, /usr/bin/fish
+```
+
+**Step 2:** Add the export to the appropriate file:
+
+**Bash** users (`~/.bashrc` or `~/.bash_profile`):
+```bash
+# Open the file in your editor, or append with echo:
+echo 'export INCEPTION_API_KEY=inc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' >> ~/.bashrc
+
+# Reload the file so it takes effect immediately:
 source ~/.bashrc
 ```
 
-**Zsh** (`~/.zshrc`):
+> **Note:** On macOS, bash reads `~/.bash_profile` on login. If you use macOS + bash, add to `~/.bash_profile` instead of `~/.bashrc`.
+
+**Zsh** users (`~/.zshrc`) — default on macOS:
 ```bash
-echo 'export INCEPTION_API_KEY=your_key_here' >> ~/.zshrc
+echo 'export INCEPTION_API_KEY=inc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-**Fish** (`~/.config/fish/config.fish`):
+**Fish** users (`~/.config/fish/config.fish`):
 ```fish
-set -Ux INCEPTION_API_KEY your_key_here
+set -Ux INCEPTION_API_KEY inc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-> **Security tip:** Do not put your API key in files tracked by git. The `.gitignore` already excludes `.env` files. If you prefer a `.env` approach, create a `.env` file in the project directory and source it manually — Mercury Code does not auto-load `.env` files.
+Fish's `set -Ux` makes the variable universal and persistent across all sessions automatically — no need to source anything.
+
+**Step 3:** Verify the key is set:
+
+```bash
+echo $INCEPTION_API_KEY
+# Should print your key: inc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+### Option D: Using a `.env` File (For Project-Based Workflows)
+
+If you prefer managing environment variables per project:
+
+```bash
+# 1. Create a .env file in the project directory
+echo 'INCEPTION_API_KEY=inc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' > .env
+
+# 2. Source it before running Mercury Code
+source .env && mercury-code
+```
+
+> **Note:** Mercury Code does **not** auto-load `.env` files. You must `source` it manually or use a tool like [direnv](https://direnv.net/) to auto-load `.env` files when you `cd` into the project directory.
+
+The `.gitignore` already excludes `.env` files, so your key will not be accidentally committed.
+
+### Option E: Inline — Single Command (For Scripts / CI)
+
+You can pass the key inline for a single command without exporting it:
+
+```bash
+INCEPTION_API_KEY=inc_xxxx mercury-code -p "Hello, Mercury!"
+```
+
+This sets the variable only for that one command and does not persist.
+
+### Verifying API Connectivity
+
+After setting your key, test that Mercury Code can reach the API:
+
+```bash
+# Quick test
+mercury-code -p "Say hello in one sentence"
+
+# Or use the built-in diagnostics
+mercury-code
+# Then inside REPL:
+/doctor
+```
+
+The `/doctor` command checks your Node.js version, API key, and network connectivity all at once.
+
+### Security Best Practices
+
+| Do | Don't |
+|---|---|
+| Store the key in your shell profile or a password manager | Commit the key to git |
+| Use a `.env` file that is gitignored | Paste the key in public chat or forums |
+| Create separate keys for different machines | Share one key across multiple people |
+| Revoke compromised keys immediately on the dashboard | Leave old/unused keys active |
+| Use `/logout` in Mercury Code to remove a stored key | Hardcode the key in source files |
 
 ---
 

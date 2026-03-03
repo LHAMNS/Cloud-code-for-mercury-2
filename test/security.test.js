@@ -429,11 +429,11 @@ describe("Security: readonly Fetch blocks query params", () => {
 
   it("allows pure GET without query params in readonly mode", async () => {
     const exec = new ToolExecutor({ workspace: "/tmp", trustMode: "readonly" });
-    // This will fail at network level, but should NOT be blocked by the query check
+    // Use 127.0.0.1:1 so SSRF blocks it immediately (private IP), no DNS hang.
     const result = await exec.execute("Fetch", {
-      url: "https://example.com/api",
+      url: "http://127.0.0.1:1/api",
     });
-    // Should not be blocked by readonly check — may fail at network level which is fine
+    // Should not be blocked by readonly check — will be blocked by SSRF which is fine
     assert.ok(!result.includes("query parameters are not allowed"),
       `Pure GET should not be blocked by query check, got: ${result}`);
   });

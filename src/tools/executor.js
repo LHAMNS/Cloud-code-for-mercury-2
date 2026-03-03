@@ -133,20 +133,24 @@ async function _checkSsrf(hostname) {
   // DNS resolution check — resolve hostname and verify all addresses are public
   try {
     const addresses = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('DNS timeout')), 5000);
       dns.resolve(hostname, (err, addrs) => {
         if (err) {
           // Try resolve4 + resolve6
           dns.resolve4(hostname, (err4, a4) => {
             if (err4) {
               dns.resolve6(hostname, (err6, a6) => {
+                clearTimeout(timer);
                 if (err6) reject(err6);
                 else resolve(a6);
               });
             } else {
+              clearTimeout(timer);
               resolve(a4);
             }
           });
         } else {
+          clearTimeout(timer);
           resolve(addrs);
         }
       });
@@ -1242,14 +1246,9 @@ export class ToolExecutor {
       if (!check.allowed) return `Error: ${check.reason}`;
     }
 
-    // SSRF protection: resolve hostname and block private/loopback addresses
-    const parsedUrl = new URL(url);
-    const ssrfCheck = await _checkSsrf(parsedUrl.hostname);
-    if (!ssrfCheck.allowed) {
-      return `Error: SSRF blocked — ${ssrfCheck.reason}`;
-    }
-
     // In readonly mode, only allow pure GET (no body, no query params — prevent data exfiltration)
+    // Checked BEFORE SSRF/DNS resolution to avoid hanging on blocked operations.
+    const parsedUrl = new URL(url);
     if (this.trustMode === 'readonly') {
       if (method.toUpperCase() !== 'GET') {
         return `Error: Only GET requests are allowed in read-only mode (attempted ${method.toUpperCase()}).`;
@@ -1262,7 +1261,29 @@ export class ToolExecutor {
       }
     }
 
+    // SSRF protection: resolve hostname and block private/loopback addresses
+    const ssrfCheck = await _checkSsrf(parsedUrl.hostname);
+    if (!ssrfCheck.allowed) {
+      return `Error: SSRF blocked — ${ssrfCheck.reason}`;
+    }
+
     return new Promise((resolve) => {
+      // Global safety timeout — ensures we never hang indefinitely
+      let settled = false;
+      const globalTimer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          resolve('Error: Request timed out (30s)');
+        }
+      }, 30000);
+      const _resolve = (val) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(globalTimer);
+          resolve(val);
+        }
+      };
+
       const lib = parsedUrl.protocol === 'https:' ? https : http;
 
       // Strip dangerous headers that could be used for SSRF or impersonation
@@ -1290,13 +1311,13 @@ export class ToolExecutor {
           const redirectUrl = new URL(res.headers.location, url).toString();
           // Validate redirect target protocol (prevent file://, ftp://, etc.)
           if (!redirectUrl.startsWith('http://') && !redirectUrl.startsWith('https://')) {
-            resolve(`Error: Redirect to non-HTTP protocol blocked: ${redirectUrl}`);
+            _resolve(`Error: Redirect to non-HTTP protocol blocked: ${redirectUrl}`);
             return;
           }
           if (res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 303) {
-            resolve(this._fetch({ url: redirectUrl, method: 'GET', headers }, _redirectCount + 1));
+            _resolve(this._fetch({ url: redirectUrl, method: 'GET', headers }, _redirectCount + 1));
           } else {
-            resolve(this._fetch({ ...args, url: redirectUrl }, _redirectCount + 1));
+            _resolve(this._fetch({ ...args, url: redirectUrl }, _redirectCount + 1));
           }
           return;
         }
@@ -1313,21 +1334,21 @@ export class ToolExecutor {
         });
         res.on('end', () => {
           if (size > MAX_BODY_SIZE) {
-            resolve(data.slice(0, 50000) + `\n... (response too large: ${(size/1024).toFixed(0)}KB, truncated)`);
+            _resolve(data.slice(0, 50000) + `\n... (response too large: ${(size/1024).toFixed(0)}KB, truncated)`);
           } else if (res.statusCode >= 400) {
-            resolve(`HTTP ${res.statusCode}: ${data.slice(0, 2000)}`);
+            _resolve(`HTTP ${res.statusCode}: ${data.slice(0, 2000)}`);
           } else if (data.length > 50000) {
-            resolve(data.slice(0, 50000) + `\n... (truncated, ${data.length} total chars)`);
+            _resolve(data.slice(0, 50000) + `\n... (truncated, ${data.length} total chars)`);
           } else {
-            resolve(data);
+            _resolve(data);
           }
         });
       });
 
-      req.on('error', (err) => resolve(`Error: ${err.message}`));
+      req.on('error', (err) => _resolve(`Error: ${err.message}`));
       req.on('timeout', () => {
         req.destroy();
-        resolve('Error: Request timed out (30s)');
+        _resolve('Error: Request timed out (30s)');
       });
 
       if (body) req.write(body);

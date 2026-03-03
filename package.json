@@ -1,6 +1,6 @@
 {
   "name": "mercury-code",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Interactive AI coding assistant powered by Mercury-2 diffusion model from Inception Labs",
   "main": "src/index.js",
   "type": "module",

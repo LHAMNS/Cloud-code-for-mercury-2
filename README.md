@@ -1,5 +1,7 @@
 # Mercury Code
 
+> **🇨🇳 中文文档 / Chinese Documentation:** 如果你需要查看完整的中文版本文档，请点击 [**README.zh-CN.md**](./README.zh-CN.md)。
+
 Interactive AI coding assistant powered by the **Mercury-2** diffusion model from [Inception Labs](https://inceptionlabs.ai).
 
 Mercury Code is a terminal-based AI agent that reads, writes, and edits code on your behalf — similar in spirit to [Claude Code](https://github.com/anthropics/claude-code), but running on the Mercury-2 model via an OpenAI-compatible API. It features a full REPL interface, built-in file and shell tools, sub-agent orchestration, sandbox isolation, a permission system, and much more.

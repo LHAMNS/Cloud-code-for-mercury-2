@@ -5,12 +5,13 @@ import { resolveAgentTools, matchAgentForTask } from "../src/agent-definitions.j
 import { TOOL_DEFINITIONS } from "../src/tools/definitions.js";
 
 describe("resolveAgentTools", () => {
-  it("excludes SubAgent/SubAgentTeam/ContextSearch for all agents", () => {
+  it("excludes SubAgent/SubAgentTeam/ContextSearch/AgentTeams for all agents", () => {
     const tools = resolveAgentTools({ tools: null, disallowedTools: [] }, "open");
     const names = tools.map((t) => t.function.name);
     assert.ok(!names.includes("SubAgent"), "SubAgent should be blocked");
     assert.ok(!names.includes("SubAgentTeam"), "SubAgentTeam should be blocked");
     assert.ok(!names.includes("ContextSearch"), "ContextSearch should be blocked");
+    assert.ok(!names.includes("AgentTeams"), "AgentTeams should be blocked");
   });
 
   it("includes core tools for general-purpose agent", () => {

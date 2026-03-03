@@ -66,8 +66,8 @@ const BUILTIN_AGENTS = {
   },
 };
 
-// Tools that sub-agents are never allowed to use (prevent recursion)
-const ALWAYS_BLOCKED_TOOLS = new Set(["SubAgent", "SubAgentTeam", "ContextSearch"]);
+// Tools that sub-agents are never allowed to use (prevent recursion & resource exhaustion)
+const ALWAYS_BLOCKED_TOOLS = new Set(["SubAgent", "SubAgentTeam", "ContextSearch", "AgentTeams"]);
 
 // ── YAML frontmatter parser (lightweight, zero-dep) ──────────────────────────
 

@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.2.0 (2026-03-03)
+
+### Enhanced Permission System (Claude Code Parity)
+- **5 permission modes**: `open`, `acceptEdits`, `approval` (default), `dontAsk`, `readonly` — matching Claude Code's full mode spectrum.
+  - `acceptEdits`: Auto-approves file edits (Write/Edit/Patch), asks for Bash/Fetch
+  - `dontAsk`: Denies everything not explicitly pre-approved via allow rules
+- **Shell operator decomposition**: Bash permission rules now decompose commands at `&&`, `||`, `;`, `|` operators and validate each segment independently. Prevents `Bash(git *)` from matching `git status && rm -rf /`.
+- **Permission rules inheritance chain**: ToolExecutor → SubAgent → AgentTeam teammates now properly propagate `permissionRules` from parent to child.
+- **canUseTool runtime callback**: Optional async callback `(toolName, input, context) → {behavior, updatedInput}` for programmatic, context-sensitive permission decisions.
+- **Settings precedence**: 5-level hierarchy (managed → CLI → local project → shared project → user global), with managed deny rules that cannot be overridden.
+- **mergeFromParent()**: Additive rule inheritance where parent deny rules are always inherited and child deny rules can override parent allow rules.
+- **Dynamic rules**: `addRule()`/`removeRule()` for runtime rule modification.
+- **Permission audit logging**: Optional logging of all permission decisions to `.mercury/audit/permissions.log`.
+- **Unified TRUST_LEVELS**: Consolidated 5-mode trust level ordering across `permissions.js` and `subagent.js` (open:0 < acceptEdits:1 < approval:2 < dontAsk:3 < readonly:4).
+
+### Test Suite
+- **375 tests** across 98 test suites (+57 new tests), covering:
+  - All 5 permission modes with correct tool access behavior
+  - TRUST_LEVELS ordering and 5-mode trust clamping
+  - Shell operator decomposition (&&, ||, ;, | protection)
+  - canUseTool callback (deny, allow, error fallback, updatedInput)
+  - Permission serialization (toConfig/fromConfig/mergeFromParent)
+  - Dynamic rule management (addRule/removeRule deduplication)
+  - Full inheritance chain (ToolExecutor → SubAgent → AgentTeam)
+  - Audit logging configuration and source tracking
+
 ## v1.1.0 (2026-03-03)
 
 ### Security Fixes

@@ -281,6 +281,7 @@ export class ToolExecutor {
    * @param {string} [options.workspace] - Workspace root directory
    * @param {string} [options.trustMode] - Trust mode: 'readonly', 'approval', 'open'
    * @param {Sandbox} [options.sandbox] - Sandbox instance for isolation enforcement
+   * @param {object} [options.permissionRules] - Permission rules to pass to sub-agents
    */
   constructor(options = {}) {
     this._clientOptions = {
@@ -291,6 +292,8 @@ export class ToolExecutor {
     this.trustMode = options.trustMode || 'approval';
     /** @type {Sandbox|null} */
     this.sandbox = options.sandbox || null;
+    /** @type {object|null} Permission rules config for sub-agents */
+    this._permissionRules = options.permissionRules || null;
     /** @type {LspClient|null} */
     this._lspClient = null;
     /** @type {Map|null} Cached agent definitions */
@@ -984,6 +987,7 @@ export class ToolExecutor {
       workspace: this.workspace,
       trustMode: this.trustMode,
       sandboxConfig: this.sandbox?.toSubAgentConfig(),
+      permissionRules: this._permissionRules,
       agentDef,
       resume: effectiveResume,
       runInBackground: effectiveBackground,
@@ -1383,6 +1387,7 @@ export class ToolExecutor {
         workspace: this.workspace,
         trustMode: this.trustMode,
         sandboxConfig: this.sandbox?.toSubAgentConfig(),
+        permissionRules: this._permissionRules,
         onAgentProgress: (agentIndex, event, detail) => {
           if (event === 'done' || event === 'error') {
             tabBar.finish(agentIndex, event === 'done', detail);
@@ -1422,6 +1427,7 @@ export class ToolExecutor {
       baseURL: this._clientOptions.baseURL,
       trustMode: this.trustMode,
       sandboxConfig: this.sandbox?.toSubAgentConfig(),
+      permissionRules: this._permissionRules,
     });
   }
 

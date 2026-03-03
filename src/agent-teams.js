@@ -219,6 +219,7 @@ export class AgentTeam {
       workspace: this.workspace,
       agentId: id,
       agentDef: opts.agentDef || null,
+      permissionRules: this._agentOptions.permissionRules || null,
       onProgress: (event, detail) => {
         this._emit("teammate_progress", { id, name, event, detail });
       },
@@ -492,6 +493,7 @@ export async function executeAgentTeams(args, executorOptions = {}) {
           baseURL: executorOptions.baseURL,
           trustMode: executorOptions.trustMode,
           sandboxConfig: executorOptions.sandboxConfig,
+          permissionRules: executorOptions.permissionRules || null,
         },
         onEvent: executorOptions.onTeamEvent,
       });

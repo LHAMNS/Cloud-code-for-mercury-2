@@ -247,7 +247,12 @@ export class Sandbox {
    * @param {object} [options.rateLimits]           - Rate limiting config { bashPerMinute, fetchPerMinute }
    */
   constructor(options = {}) {
-    this.mode = options.mode || SANDBOX_ON;
+    // Validate mode against known values
+    const requestedMode = options.mode || SANDBOX_ON;
+    if (!SANDBOX_MODES.includes(requestedMode)) {
+      throw new Error(`Invalid sandbox mode "${requestedMode}". Must be one of: ${SANDBOX_MODES.join(", ")}`);
+    }
+    this.mode = requestedMode;
     this.workspace = options.workspace || process.cwd();
     this.sandboxSubAgents = options.sandboxSubAgents !== false;
     this.allowNetwork = options.allowNetwork !== false;
@@ -565,14 +570,18 @@ export class Sandbox {
     while (current !== path.dirname(current)) {
       try {
         const real = fs.realpathSync(current);
-        return trailing.length > 0
+        const resolved = trailing.length > 0
           ? path.join(real, ...trailing.reverse())
           : real;
+        return resolved;
       } catch {
         trailing.push(path.basename(current));
         current = path.dirname(current);
       }
     }
+    // If no ancestor could be resolved, return absolute but log the event.
+    // The caller (checkPath/checkSymlink) is responsible for boundary validation.
+    this._logSecurityEvent("ancestor_resolution_failed", absolute);
     return absolute;
   }
 
@@ -692,8 +701,20 @@ export class Sandbox {
       }
     } catch (err) {
       if (err.code === "ENOENT") {
-        // Path doesn't exist yet — allow (will be created)
-        return { allowed: true, resolvedPath: filePath };
+        // Path doesn't exist yet — resolve via ancestor to detect symlink escapes
+        // in parent directories (e.g. /workspace/evil-link/newfile where evil-link → /etc)
+        const ancestorResolved = this._resolveViaAncestor(filePath);
+        const wsResolved = path.resolve(this.workspace);
+        const inWorkspace = ancestorResolved === wsResolved || ancestorResolved.startsWith(wsResolved + path.sep);
+        const inTmp = ancestorResolved.startsWith("/tmp" + path.sep) || ancestorResolved === "/tmp";
+        if (!inWorkspace && !inTmp) {
+          this._logSecurityEvent("symlink_escape_newpath", `${filePath} → ${ancestorResolved}`);
+          return {
+            allowed: false,
+            reason: `Sandbox: resolved path ${ancestorResolved} is outside workspace`,
+          };
+        }
+        return { allowed: true, resolvedPath: ancestorResolved };
       }
       // Other errors (EACCES, EIO, etc.) — deny for safety
       this._logSecurityEvent("symlink_error", `${filePath}: ${err.code || err.message}`);
@@ -715,6 +736,11 @@ export class Sandbox {
    */
   checkRateLimit(opType) {
     if (!this.enabled) return { allowed: true };
+
+    // Validate opType against known operation types to prevent prototype pollution
+    if (opType !== "bash" && opType !== "fetch") {
+      return { allowed: false, reason: `Sandbox: unknown rate limit operation type: ${opType}` };
+    }
 
     const limitKey = `${opType}PerMinute`;
     const limit = this._rateLimits[limitKey];
@@ -780,12 +806,27 @@ export class Sandbox {
       }
     }
 
-    // 3. Content scanning for secrets
-    if (this.scanContent && typeof content === "string") {
+    // 3. Content scanning for secrets (handles both strings and Buffers)
+    if (this.scanContent) {
+      const textContent = typeof content === "string" ? content : content.toString("utf-8");
+      const detectedSecrets = [];
       for (const pattern of SECRET_CONTENT_PATTERNS) {
-        if (pattern.test(content)) {
-          warnings.push(`Potential secret detected in content (pattern: ${pattern.source.slice(0, 30)}...)`);
+        if (pattern.test(textContent)) {
+          detectedSecrets.push(pattern.source.slice(0, 30));
           this._logSecurityEvent("secret_in_content", `${filePath}: matched ${pattern.source.slice(0, 40)}`);
+        }
+      }
+      if (detectedSecrets.length > 0) {
+        // In strict mode, block writes containing secrets
+        if (this.mode === SANDBOX_STRICT) {
+          return {
+            allowed: false,
+            reason: `Sandbox strict: potential secrets detected in content (${detectedSecrets.join(", ")}...)`,
+          };
+        }
+        // In standard mode, warn but allow
+        for (const s of detectedSecrets) {
+          warnings.push(`Potential secret detected in content (pattern: ${s}...)`);
         }
       }
     }

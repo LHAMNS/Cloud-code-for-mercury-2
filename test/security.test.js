@@ -744,7 +744,7 @@ describe("Sandbox write validation", () => {
     assert.equal(result.allowed, true);
   });
 
-  it("content scanning detects AWS keys", () => {
+  it("content scanning detects AWS keys in strict mode (blocks)", () => {
     const sandbox = new Sandbox({
       mode: SANDBOX_STRICT,
       workspace: "/tmp/test-ws",
@@ -753,11 +753,24 @@ describe("Sandbox write validation", () => {
     sandbox.init();
 
     const result = sandbox.checkWrite("/tmp/test-ws/config.js", 'const key = "AKIAIOSFODNN7EXAMPLE";');
-    assert.equal(result.allowed, true); // Allowed but with warning
+    assert.equal(result.allowed, false); // Strict mode blocks secrets
+    assert.ok(result.reason && result.reason.toLowerCase().includes("secret"), "Should indicate secret detected");
+  });
+
+  it("content scanning detects AWS keys in non-strict mode (warns)", () => {
+    const sandbox = new Sandbox({
+      mode: SANDBOX_ON,
+      workspace: "/tmp/test-ws",
+      scanContent: true,
+    });
+    sandbox.init();
+
+    const result = sandbox.checkWrite("/tmp/test-ws/config.js", 'const key = "AKIAIOSFODNN7EXAMPLE";');
+    assert.equal(result.allowed, true); // Non-strict mode warns only
     assert.ok(result.warnings?.length > 0, "Should produce a warning for AWS key");
   });
 
-  it("content scanning detects private keys", () => {
+  it("content scanning detects private keys in strict mode (blocks)", () => {
     const sandbox = new Sandbox({
       mode: SANDBOX_STRICT,
       workspace: "/tmp/test-ws",
@@ -766,6 +779,20 @@ describe("Sandbox write validation", () => {
     sandbox.init();
 
     const result = sandbox.checkWrite("/tmp/test-ws/key.pem", "-----BEGIN RSA PRIVATE KEY-----\nMIIE...");
+    assert.equal(result.allowed, false); // Strict mode blocks secrets
+    assert.ok(result.reason && result.reason.toLowerCase().includes("secret"), "Should indicate secret detected");
+  });
+
+  it("content scanning detects private keys in non-strict mode (warns)", () => {
+    const sandbox = new Sandbox({
+      mode: SANDBOX_ON,
+      workspace: "/tmp/test-ws",
+      scanContent: true,
+    });
+    sandbox.init();
+
+    const result = sandbox.checkWrite("/tmp/test-ws/key.pem", "-----BEGIN RSA PRIVATE KEY-----\nMIIE...");
+    assert.equal(result.allowed, true); // Non-strict warns only
     assert.ok(result.warnings?.length > 0, "Should detect private key in content");
   });
 

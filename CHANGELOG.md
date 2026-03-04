@@ -7,9 +7,8 @@
 - **Content scanning**: `SECRET_CONTENT_PATTERNS` detects AWS access keys, private keys, JWTs, GitHub tokens, and generic API key patterns in file writes. Enabled via `scanContent` option.
 - **Symlink policy enforcement**: Three policies — `resolve` (default, follows symlinks with ancestor resolution), `block` (rejects all symlinks), `allow` (permits symlinks within workspace). `checkSymlink()` method validates before file operations.
 - **Write validation**: `checkWrite()` enforces maximum file size (`maxWriteSize`), blocks dangerous file extensions (`.exe`, `.dll`, `.so`, `.sh`, `.bat`, `.cmd`, `.ps1`, `.msi`, `.app`, `.dmg`, `.deb`, `.rpm`) in strict mode, and runs content scanning for secrets.
-- **Security event logging**: In-memory ring buffer (last 1000 events) with `_logSecurityEvent()`, `getSecurityEvents()`, `exportSecurityLog()`, and `getSecuritySummary()` for audit trail.
+- **Security event logging**: In-memory ring buffer (last 200 events) with `_logSecurityEvent()`, `getSecurityEvents()`, `exportSecurityLog()`, and `getSecuritySummary()` for audit trail.
 - **Expanded sensitive paths**: Added `.cargo/credentials`, `.gradle/gradle.properties`, `.m2/settings.xml`, `.gem/credentials`, `.op`, `.config/op`, `.config/Bitwarden CLI` to deny list. Added `/var/spool` and `/root` to system write deny list.
-- **Nonce-based tamper detection**: Constructor generates a random nonce for integrity verification.
 - **Config serialization**: `toSubAgentConfig()` preserves all new security options (symlinkPolicy, scanContent, maxWriteSize, rateLimits).
 
 ### Hardened Path & URL Checking
@@ -26,7 +25,7 @@
 - **System prompt integration**: `<permissions mode="aiSafetyDecide">` section explains mode behavior to the model.
 
 ### Parallel Tool Execution
-- **Read-only tool parallelization**: Read, Glob, Grep, ListDir, Diff, Lsp, AstSearch, ContextSearch run via `Promise.allSettled()` for concurrent execution.
+- **Read-only tool parallelization**: Read, Glob, Grep, ListDir, Diff, Lsp, AstSearch run via `Promise.allSettled()` for concurrent execution.
 - **Write tool sequencing**: Write, Edit, Patch, Bash, Fetch, SubAgent, SubAgentTeam, AgentTeams execute sequentially to preserve ordering guarantees.
 - **Pre-validation phase**: All tool calls validated (hooks, permissions, fetch blocking) before execution begins.
 - **System prompt guidance**: `<parallel-tool-calling>` section instructs the model to maximize parallelism for independent operations.

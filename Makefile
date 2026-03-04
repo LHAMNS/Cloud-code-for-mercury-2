@@ -1,28 +1,46 @@
-# Mercury Code - Development Makefile
+# Mercury Code - Development & Release Makefile
 #
-# Usage:
-#   make install   - Install globally (npm link)
-#   make dev       - Run in development mode with verbose logging
-#   make test      - Run the test suite
-#   make lint      - Check for syntax errors
-#   make clean     - Remove generated files
-#   make uninstall - Unlink global binary
+# Development:
+#   make install     Install globally (npm link)
+#   make dev         Run in development mode
+#   make test        Run the test suite
+#   make lint        Check for syntax errors
+#
+# Release:
+#   make build       Build standalone binaries for all platforms
+#   make build-win   Build Windows binaries only
+#   make build-mac   Build macOS binaries only
+#   make build-linux Build Linux binaries only
+#   make release     Full release (test + build + archives + checksums)
+#   make publish     Publish to npm registry
+#   make clean       Remove build artifacts
 
-.PHONY: install dev test lint clean uninstall check-node help run
+.PHONY: install dev test lint clean uninstall check-node help run build build-win build-mac build-linux release publish
 
 # Default target
 help:
 	@echo ""
-	@echo "  Mercury Code - Development Commands"
-	@echo "  ──────────────────────────────────────"
+	@echo "  Mercury Code - Development & Release Commands"
+	@echo "  ────────────────────────────────────────────────"
 	@echo ""
-	@echo "  make install     Install globally (npm link)"
-	@echo "  make dev         Run with --verbose flag"
-	@echo "  make test        Run test suite"
-	@echo "  make lint        Check for syntax errors"
-	@echo "  make clean       Remove node_modules and generated files"
-	@echo "  make uninstall   Remove global link"
-	@echo "  make check-node  Verify Node.js version"
+	@echo "  Development:"
+	@echo "    make install      Install globally (npm link)"
+	@echo "    make dev          Run with --verbose flag"
+	@echo "    make test         Run test suite (464 tests)"
+	@echo "    make lint         Check for syntax errors"
+	@echo ""
+	@echo "  Release:"
+	@echo "    make build        Build binaries for all platforms"
+	@echo "    make build-win    Build Windows binaries only"
+	@echo "    make build-mac    Build macOS binaries only"
+	@echo "    make build-linux  Build Linux binaries only"
+	@echo "    make release      Full release pipeline"
+	@echo "    make publish      Publish to npm"
+	@echo ""
+	@echo "  Other:"
+	@echo "    make clean        Remove dist/ and node_modules/"
+	@echo "    make uninstall    Remove global link"
+	@echo "    make check-node   Verify Node.js version"
 	@echo ""
 
 # Minimum Node.js version
@@ -68,9 +86,37 @@ lint:
 	done
 	@echo "Syntax check passed."
 
+# ── Release targets ───────────────────────────────────────────────────────────
+
+# Build standalone binaries for all platforms
+build: check-node
+	node scripts/build-binaries.js
+
+# Platform-specific builds
+build-win: check-node
+	node scripts/build-binaries.js --windows
+
+build-mac: check-node
+	node scripts/build-binaries.js --macos
+
+build-linux: check-node
+	node scripts/build-binaries.js --linux
+
+# Full release pipeline
+release: test build
+	@echo ""
+	@echo "Release artifacts are in dist/"
+	@echo "To publish to npm: make publish"
+	@echo "To create a GitHub release: git tag v$$(node -e 'console.log(require("./package.json").version)') && git push origin --tags"
+	@echo ""
+
+# Publish to npm
+publish: test
+	npm publish --access public
+
 # Clean generated files
 clean:
-	rm -rf node_modules
+	rm -rf node_modules dist _pkg_entry.cjs
 	rm -f package-lock.json
 
 # Uninstall global link

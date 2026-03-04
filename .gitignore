@@ -3,3 +3,6 @@ node_modules/
 *.log
 .DS_Store
 .mercury/
+dist/
+_pkg_entry.cjs
+*.tgz

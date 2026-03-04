@@ -12,7 +12,12 @@
     "start": "node cli.js",
     "dev": "node cli.js --verbose",
     "test": "node --test test/*.test.js",
-    "postinstall": "node scripts/postinstall.js"
+    "postinstall": "node scripts/postinstall.js",
+    "build": "node scripts/build-binaries.js",
+    "build:win": "node scripts/build-binaries.js --windows",
+    "build:mac": "node scripts/build-binaries.js --macos",
+    "build:linux": "node scripts/build-binaries.js --linux",
+    "prepublishOnly": "node --test test/*.test.js"
   },
   "repository": {
     "type": "git",
@@ -42,11 +47,12 @@
   "files": [
     "cli.js",
     "src/",
-    "scripts/",
+    "scripts/postinstall.js",
     "install.sh",
     "install.ps1",
     "LICENSE.md",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "dependencies": {}
 }

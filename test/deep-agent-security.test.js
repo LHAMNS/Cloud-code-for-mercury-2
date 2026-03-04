@@ -429,12 +429,14 @@ describe("Sandbox URL enforcement", () => {
     assert.equal(result.allowed, true);
   });
 
-  it("strict mode allows localhost HTTP", () => {
+  it("strict mode blocks localhost HTTP (hardened — no localhost exception)", () => {
     const sandbox = new Sandbox({ mode: SANDBOX_STRICT, workspace: WORKSPACE });
     sandbox.init();
 
-    assert.equal(sandbox.checkUrl("http://localhost:3000").allowed, true);
-    assert.equal(sandbox.checkUrl("http://127.0.0.1:8080").allowed, true);
+    // Hardened: strict mode now blocks ALL HTTP including localhost
+    // (localhost HTTP can be exploited for SSRF to cloud metadata endpoints)
+    assert.equal(sandbox.checkUrl("http://localhost:3000").allowed, false);
+    assert.equal(sandbox.checkUrl("http://127.0.0.1:8080").allowed, false);
   });
 
   it("domain allowlist blocks unlisted domains", () => {

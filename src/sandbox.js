@@ -15,6 +15,7 @@
 import { execSync } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
+import crypto from "node:crypto";
 
 // ── Sandbox modes ────────────────────────────────────────────────────────────
 
@@ -77,6 +78,24 @@ const SENSITIVE_PATHS = [
   ".vault-token",
   // Netrc (credentials for HTTP/FTP)
   ".netrc",
+  // Helm repos (may contain tokens)
+  ".config/helm",
+  // Cargo registry credentials
+  ".cargo/credentials",
+  ".cargo/credentials.toml",
+  // Gradle properties (may contain signing keys)
+  ".gradle/gradle.properties",
+  // Maven settings (may contain repo credentials)
+  ".m2/settings.xml",
+  // Ruby gem credentials
+  ".gem/credentials",
+  // Rust/crates.io token
+  ".cargo/registry",
+  // 1Password CLI
+  ".op",
+  ".config/op",
+  // Bitwarden CLI
+  ".config/Bitwarden CLI",
 ];
 
 // System paths that should never be written to
@@ -93,6 +112,36 @@ const SYSTEM_DENY_WRITE = [
   "/dev",
   "/var/run",
   "/var/lock",
+  "/var/spool",
+  "/root",
+];
+
+// ── Dangerous file extensions ────────────────────────────────────────────────
+// In strict mode, block writes to files with these extensions (executable payloads)
+const DANGEROUS_WRITE_EXTENSIONS = new Set([
+  ".exe", ".dll", ".so", ".dylib", ".bin",
+  ".com", ".bat", ".cmd", ".ps1", ".vbs", ".wsf",
+  ".scr", ".pif", ".msi", ".msp",
+  ".cpl", ".hta", ".inf", ".reg",
+  ".elf", ".ko", ".sys",
+]);
+
+// ── Content secret patterns ──────────────────────────────────────────────────
+// Regex patterns to detect secrets in file content being written.
+// Only applied when content scanning is enabled (strict mode).
+const SECRET_CONTENT_PATTERNS = [
+  // AWS keys
+  /AKIA[0-9A-Z]{16}/,
+  // Generic long hex secrets (64+ chars)
+  /(?:secret|token|key|password|credential)[\s]*[=:]\s*['"]?[A-Za-z0-9/+=]{40,}['"]?/i,
+  // Private keys (PEM)
+  /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/,
+  // GitHub tokens
+  /gh[pousr]_[A-Za-z0-9_]{36,}/,
+  // Slack tokens
+  /xox[bporas]-[0-9]+-[A-Za-z0-9-]+/,
+  // Generic JWT
+  /eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/,
 ];
 
 // ── Sandbox capability detection ─────────────────────────────────────────────
@@ -164,6 +213,10 @@ export class Sandbox {
    * @param {boolean} [options.allowNetwork=true]   - Allow network access in sandboxed Bash commands
    * @param {string[]} [options.allowedDomains]     - Domain allowlist for Fetch (strict mode)
    * @param {string[]} [options.additionalDenyPaths] - Extra paths to deny
+   * @param {string} [options.symlinkPolicy='resolve'] - 'resolve' (default), 'block', or 'allow'
+   * @param {boolean} [options.scanContent=false]   - Scan written content for secrets (strict mode auto-enables)
+   * @param {number} [options.maxWriteSize=10485760] - Max file write size in bytes (default 10MB)
+   * @param {object} [options.rateLimits]           - Rate limiting config { bashPerMinute, fetchPerMinute }
    */
   constructor(options = {}) {
     this.mode = options.mode || SANDBOX_ON;
@@ -173,6 +226,25 @@ export class Sandbox {
     this.allowedDomains = options.allowedDomains || [];
     this.additionalDenyPaths = options.additionalDenyPaths || [];
     this._capabilities = null;
+
+    // ── New security features ──
+    // Symlink policy: 'resolve' (follow & check target), 'block' (reject symlinks), 'allow' (no check)
+    this.symlinkPolicy = options.symlinkPolicy || "resolve";
+    // Content scanning for secrets in file writes
+    this.scanContent = options.scanContent ?? (this.mode === SANDBOX_STRICT);
+    // Max write size (default 10MB)
+    this.maxWriteSize = options.maxWriteSize ?? 10485760;
+    // Rate limiting
+    this._rateLimits = options.rateLimits || {
+      bashPerMinute: this.mode === SANDBOX_STRICT ? 30 : 60,
+      fetchPerMinute: this.mode === SANDBOX_STRICT ? 20 : 40,
+    };
+    // Rate limit tracking
+    this._rateBuckets = { bash: [], fetch: [] };
+    // Security event log (in-memory, last 200 events)
+    this._securityEvents = [];
+    // Nonce for tamper detection on sandbox config export
+    this._nonce = crypto.randomBytes(8).toString("hex");
   }
 
   /**
@@ -372,13 +444,30 @@ export class Sandbox {
   checkPath(filePath, operation = "read") {
     if (!this.enabled) return { allowed: true };
 
-    const resolved = path.resolve(filePath);
+    // Validate operation type
+    if (operation !== "read" && operation !== "write") {
+      return { allowed: false, reason: `Sandbox: invalid operation type "${operation}" (must be "read" or "write")` };
+    }
+
+    // Normalize and resolve the path (resolves .. traversals)
+    let resolved = path.resolve(filePath);
+
+    // Attempt realpath resolution via nearest existing ancestor to catch
+    // symlinks pointing outside workspace (e.g. workspace/link → /etc)
+    try {
+      resolved = fs.realpathSync(resolved);
+    } catch {
+      // File may not exist yet — walk up to nearest existing ancestor
+      resolved = this._resolveViaAncestor(resolved);
+    }
+
     const home = process.env.HOME || "/root";
 
-    // Check sensitive paths (both read and write)
+    // Check sensitive paths (both read and write) — using normalized paths
     for (const sensitiveRel of SENSITIVE_PATHS) {
       const sensitiveAbs = path.resolve(home, sensitiveRel);
       if (resolved === sensitiveAbs || resolved.startsWith(sensitiveAbs + path.sep)) {
+        this._logSecurityEvent("sensitive_path_blocked", `${operation} ${filePath} → ${resolved}`);
         return {
           allowed: false,
           reason: `Sandbox: access to ${sensitiveRel} is blocked (sensitive credentials path)`,
@@ -390,6 +479,7 @@ export class Sandbox {
     for (const denyPath of this.additionalDenyPaths) {
       const denyAbs = path.resolve(denyPath);
       if (resolved === denyAbs || resolved.startsWith(denyAbs + path.sep)) {
+        this._logSecurityEvent("custom_deny_blocked", `${operation} ${filePath}`);
         return {
           allowed: false,
           reason: `Sandbox: access to ${denyPath} is blocked (custom deny rule)`,
@@ -401,6 +491,7 @@ export class Sandbox {
     if (operation === "write") {
       for (const sysPath of SYSTEM_DENY_WRITE) {
         if (resolved === sysPath || resolved.startsWith(sysPath + path.sep)) {
+          this._logSecurityEvent("system_write_blocked", `${filePath} → ${resolved}`);
           return {
             allowed: false,
             reason: `Sandbox: writes to ${sysPath} are blocked (system path)`,
@@ -409,8 +500,8 @@ export class Sandbox {
       }
     }
 
-    // In strict mode, enforce that reads are also within workspace (except /tmp)
-    if (this.mode === SANDBOX_STRICT && operation === "read") {
+    // In strict mode, enforce workspace+/tmp boundary for BOTH read AND write
+    if (this.mode === SANDBOX_STRICT) {
       const wsResolved = path.resolve(this.workspace);
       const inWorkspace =
         resolved === wsResolved || resolved.startsWith(wsResolved + path.sep);
@@ -420,14 +511,41 @@ export class Sandbox {
       const inTmp = resolved.startsWith(tmpDir + path.sep) || resolved === tmpDir;
 
       if (!inWorkspace && !inTmp) {
+        this._logSecurityEvent("strict_boundary_blocked", `${operation} ${filePath} → ${resolved}`);
         return {
           allowed: false,
-          reason: `Sandbox strict: reads outside workspace are blocked: ${resolved}`,
+          reason: `Sandbox strict: ${operation}s outside workspace are blocked: ${resolved}`,
         };
       }
     }
 
     return { allowed: true };
+  }
+
+  /**
+   * Resolve a non-existent path by walking up to nearest existing ancestor,
+   * resolving symlinks on the ancestor, and appending remaining segments.
+   * Prevents symlink escape attacks (e.g. workspace/evil-link/file where evil-link → /etc).
+   * @param {string} filePath
+   * @returns {string} Resolved path
+   */
+  _resolveViaAncestor(filePath) {
+    const absolute = path.resolve(filePath);
+    let current = absolute;
+    const trailing = [];
+
+    while (current !== path.dirname(current)) {
+      try {
+        const real = fs.realpathSync(current);
+        return trailing.length > 0
+          ? path.join(real, ...trailing.reverse())
+          : real;
+      } catch {
+        trailing.push(path.basename(current));
+        current = path.dirname(current);
+      }
+    }
+    return absolute;
   }
 
   // ── URL / network policy ──────────────────────────────────────────────
@@ -442,36 +560,233 @@ export class Sandbox {
   checkUrl(url) {
     if (!this.enabled) return { allowed: true };
 
-    // Block non-HTTPS in strict mode
+    // Force URL parsing first — reject malformed URLs early
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch {
+      this._logSecurityEvent("invalid_url", url);
+      return { allowed: false, reason: "Sandbox: invalid URL" };
+    }
+
+    // Strict + allowNetwork=false: block ALL network access
+    if (this.mode === SANDBOX_STRICT && !this.allowNetwork) {
+      this._logSecurityEvent("network_blocked", url);
+      return {
+        allowed: false,
+        reason: "Sandbox strict: network access is disabled (allowNetwork=false)",
+      };
+    }
+
+    // Block non-HTTPS in strict mode — NO localhost exception
+    // (localhost HTTP can be used for SSRF to cloud metadata endpoints etc.)
     if (this.mode === SANDBOX_STRICT) {
-      if (url.startsWith("http://") && !url.startsWith("http://localhost") && !url.startsWith("http://127.0.0.1")) {
+      if (parsed.protocol !== "https:") {
+        this._logSecurityEvent("http_blocked", url);
         return {
           allowed: false,
-          reason: "Sandbox strict: plain HTTP is blocked (use HTTPS)",
+          reason: "Sandbox strict: plain HTTP is blocked, including localhost (use HTTPS)",
         };
       }
     }
 
     // Domain allowlist (strict mode only, when configured)
     if (this.mode === SANDBOX_STRICT && this.allowedDomains.length > 0) {
-      try {
-        const parsed = new URL(url);
-        const domain = parsed.hostname;
-        const isAllowed = this.allowedDomains.some(
-          (d) => domain === d || domain.endsWith("." + d)
-        );
-        if (!isAllowed) {
-          return {
-            allowed: false,
-            reason: `Sandbox strict: domain ${domain} is not in allowlist [${this.allowedDomains.join(", ")}]`,
-          };
-        }
-      } catch {
-        return { allowed: false, reason: "Sandbox: invalid URL" };
+      // Normalize domain: lowercase, strip trailing dot
+      const domain = parsed.hostname.toLowerCase().replace(/\.$/, "");
+      const normalizedAllowlist = this.allowedDomains.map(
+        (d) => d.toLowerCase().replace(/\.$/, "")
+      );
+      const isAllowed = normalizedAllowlist.some(
+        (d) => domain === d || domain.endsWith("." + d)
+      );
+      if (!isAllowed) {
+        this._logSecurityEvent("domain_blocked", `${domain} not in [${normalizedAllowlist.join(", ")}]`);
+        return {
+          allowed: false,
+          reason: `Sandbox strict: domain ${domain} is not in allowlist [${normalizedAllowlist.join(", ")}]`,
+        };
       }
     }
 
     return { allowed: true };
+  }
+
+  // ── Symlink policy enforcement ────────────────────────────────────────
+
+  /**
+   * Check a path against the symlink policy.
+   * @param {string} filePath - Path to check
+   * @returns {{ allowed: boolean, resolvedPath?: string, reason?: string }}
+   */
+  checkSymlink(filePath) {
+    if (!this.enabled || this.symlinkPolicy === "allow") {
+      return { allowed: true, resolvedPath: filePath };
+    }
+
+    try {
+      const lstat = fs.lstatSync(filePath);
+      const isSymlink = lstat.isSymbolicLink();
+
+      if (isSymlink && this.symlinkPolicy === "block") {
+        this._logSecurityEvent("symlink_blocked", filePath);
+        return {
+          allowed: false,
+          reason: `Sandbox: symlinks are blocked by policy (path: ${filePath})`,
+        };
+      }
+
+      if (isSymlink && this.symlinkPolicy === "resolve") {
+        // Resolve the symlink and verify target is within workspace or /tmp
+        const realTarget = fs.realpathSync(filePath);
+        const wsResolved = path.resolve(this.workspace);
+        const inWorkspace = realTarget === wsResolved || realTarget.startsWith(wsResolved + path.sep);
+        const inTmp = realTarget.startsWith("/tmp" + path.sep) || realTarget === "/tmp";
+
+        if (!inWorkspace && !inTmp) {
+          this._logSecurityEvent("symlink_escape", `${filePath} → ${realTarget}`);
+          return {
+            allowed: false,
+            reason: `Sandbox: symlink target ${realTarget} is outside workspace (escape attempt)`,
+          };
+        }
+        return { allowed: true, resolvedPath: realTarget };
+      }
+    } catch (err) {
+      if (err.code === "ENOENT") {
+        // Path doesn't exist yet — allow (will be created)
+        return { allowed: true, resolvedPath: filePath };
+      }
+      // Other errors — allow and let downstream handle
+    }
+
+    return { allowed: true, resolvedPath: filePath };
+  }
+
+  // ── Rate limiting ──────────────────────────────────────────────────────
+
+  /**
+   * Check rate limit for a given operation type.
+   * @param {string} opType - 'bash' or 'fetch'
+   * @returns {{ allowed: boolean, reason?: string, retryAfterMs?: number }}
+   */
+  checkRateLimit(opType) {
+    if (!this.enabled) return { allowed: true };
+
+    const limitKey = `${opType}PerMinute`;
+    const limit = this._rateLimits[limitKey];
+    if (!limit) return { allowed: true };
+
+    const bucket = this._rateBuckets[opType];
+    if (!bucket) return { allowed: true };
+
+    const now = Date.now();
+    const windowMs = 60000; // 1 minute
+
+    // Prune old entries
+    while (bucket.length > 0 && bucket[0] < now - windowMs) {
+      bucket.shift();
+    }
+
+    if (bucket.length >= limit) {
+      const retryAfterMs = bucket[0] + windowMs - now;
+      this._logSecurityEvent("rate_limited", `${opType}: ${bucket.length}/${limit} per minute`);
+      return {
+        allowed: false,
+        reason: `Sandbox: rate limit exceeded for ${opType} (${limit}/min). Retry in ${Math.ceil(retryAfterMs / 1000)}s.`,
+        retryAfterMs,
+      };
+    }
+
+    bucket.push(now);
+    return { allowed: true };
+  }
+
+  // ── File write validation ──────────────────────────────────────────────
+
+  /**
+   * Validate a file write operation (size, extension, content scanning).
+   * @param {string} filePath - Target file path
+   * @param {string|Buffer} content - Content to write
+   * @returns {{ allowed: boolean, reason?: string, warnings?: string[] }}
+   */
+  checkWrite(filePath, content) {
+    if (!this.enabled) return { allowed: true };
+
+    const warnings = [];
+
+    // 1. Check file size limit
+    const size = typeof content === "string" ? Buffer.byteLength(content, "utf-8") : content.length;
+    if (size > this.maxWriteSize) {
+      this._logSecurityEvent("write_size_exceeded", `${filePath}: ${size} bytes > ${this.maxWriteSize}`);
+      return {
+        allowed: false,
+        reason: `Sandbox: file write exceeds size limit (${(size / 1048576).toFixed(1)}MB > ${(this.maxWriteSize / 1048576).toFixed(1)}MB)`,
+      };
+    }
+
+    // 2. Check dangerous extensions (strict mode only)
+    if (this.mode === SANDBOX_STRICT) {
+      const ext = path.extname(filePath).toLowerCase();
+      if (DANGEROUS_WRITE_EXTENSIONS.has(ext)) {
+        this._logSecurityEvent("dangerous_extension", `${filePath} (${ext})`);
+        return {
+          allowed: false,
+          reason: `Sandbox strict: writing executable files (${ext}) is blocked`,
+        };
+      }
+    }
+
+    // 3. Content scanning for secrets
+    if (this.scanContent && typeof content === "string") {
+      for (const pattern of SECRET_CONTENT_PATTERNS) {
+        if (pattern.test(content)) {
+          warnings.push(`Potential secret detected in content (pattern: ${pattern.source.slice(0, 30)}...)`);
+          this._logSecurityEvent("secret_in_content", `${filePath}: matched ${pattern.source.slice(0, 40)}`);
+        }
+      }
+    }
+
+    return { allowed: true, warnings: warnings.length > 0 ? warnings : undefined };
+  }
+
+  // ── Security event logging ─────────────────────────────────────────────
+
+  /**
+   * Log a security event (in-memory ring buffer, last 200).
+   * @param {string} type - Event type
+   * @param {string} detail - Event detail
+   */
+  _logSecurityEvent(type, detail) {
+    const event = {
+      ts: Date.now(),
+      type,
+      detail,
+      mode: this.mode,
+    };
+    this._securityEvents.push(event);
+    if (this._securityEvents.length > 200) {
+      this._securityEvents.shift();
+    }
+  }
+
+  /**
+   * Get recent security events (for audit/debug).
+   * @param {number} [count=50] - Max events to return
+   * @returns {Array<{ts: number, type: string, detail: string, mode: string}>}
+   */
+  getSecurityEvents(count = 50) {
+    return this._securityEvents.slice(-count);
+  }
+
+  /**
+   * Export security events as a formatted string for audit logging.
+   * @returns {string}
+   */
+  exportSecurityLog() {
+    return this._securityEvents
+      .map((e) => `[${new Date(e.ts).toISOString()}] [${e.mode}] ${e.type}: ${e.detail}`)
+      .join("\n");
   }
 
   // ── Serialization for sub-agents ───────────────────────────────────────
@@ -491,6 +806,38 @@ export class Sandbox {
       allowNetwork: this.allowNetwork,
       allowedDomains: this.allowedDomains,
       additionalDenyPaths: this.additionalDenyPaths,
+      symlinkPolicy: this.symlinkPolicy,
+      scanContent: this.scanContent,
+      maxWriteSize: this.maxWriteSize,
+      rateLimits: { ...this._rateLimits },
+    };
+  }
+
+  // ── Summary ────────────────────────────────────────────────────────────
+
+  /**
+   * Get a comprehensive security summary for diagnostics.
+   * @returns {object}
+   */
+  getSecuritySummary() {
+    const caps = this._capabilities || detectCapabilities();
+    return {
+      mode: this.mode,
+      enabled: this.enabled,
+      backend: caps.bwrap ? "bwrap" : caps.firejail ? "firejail" : caps.unshare ? "unshare" : "basic",
+      workspace: this.workspace,
+      symlinkPolicy: this.symlinkPolicy,
+      scanContent: this.scanContent,
+      maxWriteSize: this.maxWriteSize,
+      rateLimits: { ...this._rateLimits },
+      allowNetwork: this.allowNetwork,
+      allowedDomains: this.allowedDomains,
+      additionalDenyPaths: this.additionalDenyPaths,
+      sandboxSubAgents: this.sandboxSubAgents,
+      blockedExtensions: this.mode === SANDBOX_STRICT ? [...DANGEROUS_WRITE_EXTENSIONS] : [],
+      sensitivePathCount: SENSITIVE_PATHS.length,
+      systemDenyWriteCount: SYSTEM_DENY_WRITE.length,
+      recentSecurityEvents: this._securityEvents.length,
     };
   }
 

@@ -1,10 +1,12 @@
 // Security tests — SSRF, symlink escape, path traversal, permission enforcement,
-// suspicious commands, null bytes, credential protection, URL validation
-import { describe, it } from "node:test";
+// suspicious commands, null bytes, credential protection, URL validation,
+// hardened checkPath/checkUrl, rate limiting, content scanning, parallel tools
+import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
+import fs from "node:fs";
 import { ToolExecutor } from "../src/tools/executor.js";
-import { Sandbox } from "../src/sandbox.js";
+import { Sandbox, SANDBOX_ON, SANDBOX_STRICT, SANDBOX_OFF } from "../src/sandbox.js";
 
 describe("Security: workspace boundary", () => {
   it("blocks writes outside workspace", async () => {
@@ -479,5 +481,422 @@ describe("Security: one-time outside-workspace bypass", () => {
     });
     assert.ok(result.includes("outside workspace") || result.includes("blocked"),
       `Should block outside workspace, got: ${result}`);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Hardened checkPath: operation validation, realpath resolution, strict mode
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Hardened checkPath", () => {
+  it("rejects invalid operation type", () => {
+    const sandbox = new Sandbox({ mode: SANDBOX_ON, workspace: "/tmp/test-ws" });
+    sandbox.init();
+    const result = sandbox.checkPath("/tmp/test", "execute");
+    assert.equal(result.allowed, false);
+    assert.ok(result.reason.includes("invalid operation"));
+  });
+
+  it("strict mode blocks reads outside workspace (no /usr exception)", () => {
+    const sandbox = new Sandbox({ mode: SANDBOX_STRICT, workspace: "/tmp/test-ws" });
+    sandbox.init();
+    const result = sandbox.checkPath("/usr/local/lib/node.js", "read");
+    assert.equal(result.allowed, false);
+  });
+
+  it("strict mode blocks writes outside workspace", () => {
+    const sandbox = new Sandbox({ mode: SANDBOX_STRICT, workspace: "/tmp/test-ws" });
+    sandbox.init();
+    const result = sandbox.checkPath("/var/log/test.log", "write");
+    assert.equal(result.allowed, false);
+  });
+
+  it("strict mode allows reads in /tmp", () => {
+    const sandbox = new Sandbox({ mode: SANDBOX_STRICT, workspace: "/tmp/test-ws" });
+    sandbox.init();
+    const result = sandbox.checkPath("/tmp/other-file.txt", "read");
+    assert.equal(result.allowed, true);
+  });
+
+  it("strict mode allows workspace paths", () => {
+    const sandbox = new Sandbox({ mode: SANDBOX_STRICT, workspace: "/tmp/test-ws" });
+    sandbox.init();
+    assert.equal(sandbox.checkPath("/tmp/test-ws/src/index.js", "read").allowed, true);
+    assert.equal(sandbox.checkPath("/tmp/test-ws/src/index.js", "write").allowed, true);
+  });
+
+  it("blocks access through symlink pointing to sensitive dir", () => {
+    const sandbox = new Sandbox({ mode: SANDBOX_ON, workspace: "/tmp/test-ws" });
+    sandbox.init();
+
+    // Create a temp symlink pointing to a sensitive directory
+    const linkPath = "/tmp/test-ws-symlink-test-" + Date.now();
+    const home = process.env.HOME || "/root";
+    const sshDir = path.join(home, ".ssh");
+
+    // Only test if .ssh exists — skip otherwise
+    if (fs.existsSync(sshDir)) {
+      try {
+        fs.symlinkSync(sshDir, linkPath);
+        // checkPath should resolve the symlink and block access
+        const result = sandbox.checkPath(linkPath, "read");
+        assert.equal(result.allowed, false,
+          `Should block symlink to .ssh, got: ${JSON.stringify(result)}`);
+      } finally {
+        try { fs.unlinkSync(linkPath); } catch { /* cleanup */ }
+      }
+    }
+  });
+
+  it("blocks new sensitive paths (cargo, gradle, gem, m2)", () => {
+    const sandbox = new Sandbox({ mode: SANDBOX_ON, workspace: "/tmp/test-ws" });
+    sandbox.init();
+    const home = process.env.HOME || "/root";
+
+    const newSensitive = [
+      ".cargo/credentials",
+      ".cargo/credentials.toml",
+      ".gradle/gradle.properties",
+      ".m2/settings.xml",
+      ".gem/credentials",
+      ".op",
+    ];
+
+    for (const file of newSensitive) {
+      const result = sandbox.checkPath(path.join(home, file), "read");
+      assert.equal(result.allowed, false, `Should block ${file}: ${JSON.stringify(result)}`);
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Hardened checkUrl: strict HTTPS-only, no localhost exception, domain norm
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Hardened checkUrl", () => {
+  it("strict mode blocks localhost HTTP", () => {
+    const sandbox = new Sandbox({ mode: SANDBOX_STRICT, workspace: "/tmp/test-ws" });
+    sandbox.init();
+    assert.equal(sandbox.checkUrl("http://localhost:3000").allowed, false,
+      "Should block http://localhost in strict mode");
+    assert.equal(sandbox.checkUrl("http://127.0.0.1:8080").allowed, false,
+      "Should block http://127.0.0.1 in strict mode");
+  });
+
+  it("strict mode allows HTTPS", () => {
+    const sandbox = new Sandbox({ mode: SANDBOX_STRICT, workspace: "/tmp/test-ws" });
+    sandbox.init();
+    assert.equal(sandbox.checkUrl("https://example.com").allowed, true);
+  });
+
+  it("strict + allowNetwork=false blocks all URLs", () => {
+    const sandbox = new Sandbox({
+      mode: SANDBOX_STRICT,
+      workspace: "/tmp/test-ws",
+      allowNetwork: false,
+    });
+    sandbox.init();
+    assert.equal(sandbox.checkUrl("https://example.com").allowed, false);
+    assert.ok(sandbox.checkUrl("https://example.com").reason.includes("network access is disabled"));
+  });
+
+  it("domain allowlist normalizes case", () => {
+    const sandbox = new Sandbox({
+      mode: SANDBOX_STRICT,
+      workspace: "/tmp/test-ws",
+      allowedDomains: ["GitHub.COM"],
+    });
+    sandbox.init();
+    assert.equal(sandbox.checkUrl("https://github.com/api").allowed, true,
+      "Lowercase domain should match uppercase allowlist");
+    assert.equal(sandbox.checkUrl("https://GITHUB.COM/api").allowed, true,
+      "Uppercase domain should match");
+  });
+
+  it("domain allowlist normalizes trailing dot", () => {
+    const sandbox = new Sandbox({
+      mode: SANDBOX_STRICT,
+      workspace: "/tmp/test-ws",
+      allowedDomains: ["example.com."],
+    });
+    sandbox.init();
+    assert.equal(sandbox.checkUrl("https://example.com/api").allowed, true,
+      "Domain without trailing dot should match allowlist with trailing dot");
+  });
+
+  it("rejects malformed URLs", () => {
+    const sandbox = new Sandbox({ mode: SANDBOX_ON, workspace: "/tmp/test-ws" });
+    sandbox.init();
+    const result = sandbox.checkUrl("not-a-valid-url");
+    assert.equal(result.allowed, false);
+    assert.ok(result.reason.includes("invalid URL"));
+  });
+
+  it("on mode still allows HTTP (no strict restrictions)", () => {
+    const sandbox = new Sandbox({ mode: SANDBOX_ON, workspace: "/tmp/test-ws" });
+    sandbox.init();
+    assert.equal(sandbox.checkUrl("http://example.com").allowed, true);
+    assert.equal(sandbox.checkUrl("http://localhost:3000").allowed, true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Rate limiting
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Sandbox rate limiting", () => {
+  it("allows calls within limit", () => {
+    const sandbox = new Sandbox({
+      mode: SANDBOX_ON,
+      workspace: "/tmp/test-ws",
+      rateLimits: { bashPerMinute: 5, fetchPerMinute: 5 },
+    });
+    sandbox.init();
+
+    for (let i = 0; i < 5; i++) {
+      assert.equal(sandbox.checkRateLimit("bash").allowed, true, `Call ${i + 1} should be allowed`);
+    }
+  });
+
+  it("blocks calls exceeding limit", () => {
+    const sandbox = new Sandbox({
+      mode: SANDBOX_ON,
+      workspace: "/tmp/test-ws",
+      rateLimits: { bashPerMinute: 3, fetchPerMinute: 3 },
+    });
+    sandbox.init();
+
+    for (let i = 0; i < 3; i++) {
+      sandbox.checkRateLimit("bash");
+    }
+    const result = sandbox.checkRateLimit("bash");
+    assert.equal(result.allowed, false);
+    assert.ok(result.reason.includes("rate limit"));
+  });
+
+  it("returns retry time when rate limited", () => {
+    const sandbox = new Sandbox({
+      mode: SANDBOX_ON,
+      workspace: "/tmp/test-ws",
+      rateLimits: { bashPerMinute: 1, fetchPerMinute: 1 },
+    });
+    sandbox.init();
+
+    sandbox.checkRateLimit("fetch");
+    const result = sandbox.checkRateLimit("fetch");
+    assert.equal(result.allowed, false);
+    assert.ok(result.retryAfterMs > 0);
+  });
+
+  it("disabled when sandbox is off", () => {
+    const sandbox = new Sandbox({ mode: SANDBOX_OFF, workspace: "/tmp/test-ws" });
+    sandbox.init();
+    assert.equal(sandbox.checkRateLimit("bash").allowed, true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// File write validation (size, extensions, content scanning)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Sandbox write validation", () => {
+  it("blocks files exceeding max size", () => {
+    const sandbox = new Sandbox({
+      mode: SANDBOX_ON,
+      workspace: "/tmp/test-ws",
+      maxWriteSize: 100, // 100 bytes for testing
+    });
+    sandbox.init();
+
+    const result = sandbox.checkWrite("/tmp/test-ws/large.txt", "A".repeat(200));
+    assert.equal(result.allowed, false);
+    assert.ok(result.reason.includes("size limit"));
+  });
+
+  it("allows files within size limit", () => {
+    const sandbox = new Sandbox({
+      mode: SANDBOX_ON,
+      workspace: "/tmp/test-ws",
+      maxWriteSize: 1000,
+    });
+    sandbox.init();
+
+    const result = sandbox.checkWrite("/tmp/test-ws/small.txt", "hello world");
+    assert.equal(result.allowed, true);
+  });
+
+  it("strict mode blocks dangerous extensions", () => {
+    const sandbox = new Sandbox({ mode: SANDBOX_STRICT, workspace: "/tmp/test-ws" });
+    sandbox.init();
+
+    const exts = [".exe", ".dll", ".so", ".bat", ".ps1"];
+    for (const ext of exts) {
+      const result = sandbox.checkWrite(`/tmp/test-ws/malware${ext}`, "test");
+      assert.equal(result.allowed, false, `Should block ${ext}: ${JSON.stringify(result)}`);
+    }
+  });
+
+  it("on mode allows executable extensions", () => {
+    const sandbox = new Sandbox({ mode: SANDBOX_ON, workspace: "/tmp/test-ws" });
+    sandbox.init();
+
+    const result = sandbox.checkWrite("/tmp/test-ws/script.exe", "test");
+    assert.equal(result.allowed, true);
+  });
+
+  it("content scanning detects AWS keys", () => {
+    const sandbox = new Sandbox({
+      mode: SANDBOX_STRICT,
+      workspace: "/tmp/test-ws",
+      scanContent: true,
+    });
+    sandbox.init();
+
+    const result = sandbox.checkWrite("/tmp/test-ws/config.js", 'const key = "AKIAIOSFODNN7EXAMPLE";');
+    assert.equal(result.allowed, true); // Allowed but with warning
+    assert.ok(result.warnings?.length > 0, "Should produce a warning for AWS key");
+  });
+
+  it("content scanning detects private keys", () => {
+    const sandbox = new Sandbox({
+      mode: SANDBOX_STRICT,
+      workspace: "/tmp/test-ws",
+      scanContent: true,
+    });
+    sandbox.init();
+
+    const result = sandbox.checkWrite("/tmp/test-ws/key.pem", "-----BEGIN RSA PRIVATE KEY-----\nMIIE...");
+    assert.ok(result.warnings?.length > 0, "Should detect private key in content");
+  });
+
+  it("disabled when sandbox is off", () => {
+    const sandbox = new Sandbox({ mode: SANDBOX_OFF, workspace: "/tmp/test-ws" });
+    sandbox.init();
+    const result = sandbox.checkWrite("/tmp/test.exe", "A".repeat(99999999));
+    assert.equal(result.allowed, true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Symlink policy enforcement
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Sandbox symlink policy", () => {
+  it("block policy rejects existing symlinks", () => {
+    const sandbox = new Sandbox({
+      mode: SANDBOX_ON,
+      workspace: "/tmp/test-ws",
+      symlinkPolicy: "block",
+    });
+    sandbox.init();
+
+    // /tmp is often a symlink on some systems; test with a known file
+    const testLink = "/tmp/sandbox-test-symlink-" + Date.now();
+    try {
+      fs.symlinkSync("/tmp", testLink);
+      const result = sandbox.checkSymlink(testLink);
+      assert.equal(result.allowed, false);
+      assert.ok(result.reason.includes("symlinks are blocked"));
+    } finally {
+      try { fs.unlinkSync(testLink); } catch { /* cleanup */ }
+    }
+  });
+
+  it("allow policy skips symlink check", () => {
+    const sandbox = new Sandbox({
+      mode: SANDBOX_ON,
+      workspace: "/tmp/test-ws",
+      symlinkPolicy: "allow",
+    });
+    sandbox.init();
+
+    const result = sandbox.checkSymlink("/tmp/any-path");
+    assert.equal(result.allowed, true);
+  });
+
+  it("resolve policy allows non-existent paths", () => {
+    const sandbox = new Sandbox({
+      mode: SANDBOX_ON,
+      workspace: "/tmp/test-ws",
+      symlinkPolicy: "resolve",
+    });
+    sandbox.init();
+
+    const result = sandbox.checkSymlink("/tmp/test-ws/nonexistent-file.txt");
+    assert.equal(result.allowed, true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Security event logging
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Sandbox security event logging", () => {
+  it("logs security events on blocked operations", () => {
+    const sandbox = new Sandbox({ mode: SANDBOX_STRICT, workspace: "/tmp/test-ws" });
+    sandbox.init();
+
+    // Trigger some blocked operations
+    sandbox.checkUrl("http://evil.com");
+    sandbox.checkPath("/etc/shadow", "read");
+
+    const events = sandbox.getSecurityEvents();
+    assert.ok(events.length >= 2, `Should have logged events, got ${events.length}`);
+    assert.ok(events.some(e => e.type === "http_blocked"));
+    assert.ok(events.some(e => e.type === "strict_boundary_blocked"));
+  });
+
+  it("exportSecurityLog returns formatted string", () => {
+    const sandbox = new Sandbox({ mode: SANDBOX_STRICT, workspace: "/tmp/test-ws" });
+    sandbox.init();
+
+    sandbox.checkUrl("http://test.com");
+    const log = sandbox.exportSecurityLog();
+    assert.ok(log.includes("http_blocked"));
+    assert.ok(log.includes("[strict]"));
+  });
+
+  it("getSecuritySummary returns comprehensive info", () => {
+    const sandbox = new Sandbox({
+      mode: SANDBOX_STRICT,
+      workspace: "/tmp/test-ws",
+      allowedDomains: ["api.github.com"],
+      scanContent: true,
+    });
+    sandbox.init();
+
+    const summary = sandbox.getSecuritySummary();
+    assert.equal(summary.mode, "strict");
+    assert.equal(summary.enabled, true);
+    assert.equal(summary.scanContent, true);
+    assert.deepEqual(summary.allowedDomains, ["api.github.com"]);
+    assert.ok(summary.sensitivePathCount > 0);
+    assert.ok(summary.blockedExtensions.length > 0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// toSubAgentConfig preserves new security options
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Sandbox config serialization with new features", () => {
+  it("toSubAgentConfig preserves all new security options", () => {
+    const sandbox = new Sandbox({
+      mode: SANDBOX_STRICT,
+      workspace: "/tmp/test-ws",
+      allowedDomains: ["api.example.com"],
+      symlinkPolicy: "block",
+      scanContent: true,
+      maxWriteSize: 5000000,
+      rateLimits: { bashPerMinute: 10, fetchPerMinute: 5 },
+      sandboxSubAgents: true,
+    });
+
+    const config = sandbox.toSubAgentConfig();
+    assert.equal(config.mode, SANDBOX_STRICT);
+    assert.equal(config.symlinkPolicy, "block");
+    assert.equal(config.scanContent, true);
+    assert.equal(config.maxWriteSize, 5000000);
+    assert.deepEqual(config.rateLimits, { bashPerMinute: 10, fetchPerMinute: 5 });
   });
 });

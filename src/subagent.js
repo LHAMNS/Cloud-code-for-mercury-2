@@ -536,6 +536,13 @@ export class SubAgent {
           })),
         });
 
+        // ── Parallel tool execution ──
+        // Read-only tools can safely run concurrently. Write tools run sequentially
+        // to preserve ordering semantics and avoid race conditions.
+        const READ_ONLY_TOOLS = new Set(["read", "glob", "grep", "listdir", "diff", "lsp", "astsearch", "contextsearch"]);
+
+        // Phase 1: Pre-validate all tool calls (hooks, permissions)
+        const validatedCalls = [];
         for (const tc of message.tool_calls) {
           const fnName = tc.function.name;
           let args;
@@ -569,8 +576,6 @@ export class SubAgent {
           }
           // In sub-agents, "ask" permission = deny (no user to approve)
           if (permCheck.decision === "ask" && hookResult.action !== "allow") {
-            // Sub-agent permission enforcement:
-            // In approval mode, block tools that require approval (no user to approve)
             if (this.trustMode === "approval") {
               const errMsg = `Error: ${fnName} requires approval, not available to sub-agents in approval mode.`;
               this._emit("tool_result", `${fnName} blocked`);
@@ -580,7 +585,6 @@ export class SubAgent {
           }
 
           // Block ALL Fetch in sub-agents (approval mode) — prevent data exfiltration
-          // via GET query params, POST body, or any other method
           if (this.trustMode === "approval" && fnName.toLowerCase() === "fetch") {
             const errMsg = "Error: Fetch is completely disabled for sub-agents in approval mode (prevents data exfiltration via URL query params or request body).";
             this._emit("tool_result", `${fnName} blocked`);
@@ -588,28 +592,58 @@ export class SubAgent {
             continue;
           }
 
-          // Emit tool call event with formatted detail
+          validatedCalls.push({ tc, fnName, args });
+        }
+
+        // Phase 2: Execute tools — parallelize read-only, serialize writes
+        // Partition into read-only (parallelizable) and write (sequential) groups
+        const readOnlyCalls = validatedCalls.filter(c => READ_ONLY_TOOLS.has(c.fnName.toLowerCase()));
+        const writeCalls = validatedCalls.filter(c => !READ_ONLY_TOOLS.has(c.fnName.toLowerCase()));
+
+        // Execute a single validated tool call and return its result
+        const executeTool = async ({ tc, fnName, args }) => {
           const toolDetail = _formatToolDetail(fnName, args);
           this._emit("tool_call", `${fnName} ${toolDetail}`);
 
-          const result = await this.toolExecutor.execute(
-            fnName.toLowerCase(),
-            args
-          );
-
+          const result = await this.toolExecutor.execute(fnName.toLowerCase(), args);
           this._emit("tool_result", `${fnName} done`);
 
           // ── PostToolUse hook ──
           await this._hooks.firePostToolUse(fnName, args, String(result));
-
-          // Log tool result
           await this.log.append({ role: "tool", name: fnName, result: String(result) });
 
-          // Wrap result in content fence to mitigate prompt injection
+          return { tc, result: String(result) };
+        };
+
+        // Run read-only tools in parallel (safe — no side effects on workspace)
+        if (readOnlyCalls.length > 0) {
+          const readResults = await Promise.allSettled(readOnlyCalls.map(executeTool));
+          for (const settled of readResults) {
+            if (settled.status === "fulfilled") {
+              const { tc, result } = settled.value;
+              this.messages.push({
+                role: "tool",
+                tool_call_id: tc.id,
+                content: `${FENCE_START}\n${result}\n${FENCE_END}`,
+              });
+            } else {
+              // Should not happen, but handle gracefully
+              this.messages.push({
+                role: "tool",
+                tool_call_id: readOnlyCalls[0]?.tc.id || "unknown",
+                content: `Error: Tool execution failed: ${settled.reason?.message || "unknown error"}`,
+              });
+            }
+          }
+        }
+
+        // Run write/mutating tools sequentially (order matters)
+        for (const call of writeCalls) {
+          const { tc, result } = await executeTool(call);
           this.messages.push({
             role: "tool",
             tool_call_id: tc.id,
-            content: `${FENCE_START}\n${String(result)}\n${FENCE_END}`,
+            content: `${FENCE_START}\n${result}\n${FENCE_END}`,
           });
         }
 

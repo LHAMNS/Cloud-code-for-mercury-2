@@ -535,13 +535,31 @@ export class ToolExecutor {
     if (this.sandbox?.enabled) {
       const check = this.sandbox.checkPath(file_path, 'write');
       if (!check.allowed) return `Error: ${check.reason}`;
+
+      // Symlink policy check
+      const symlinkCheck = this.sandbox.checkSymlink(file_path);
+      if (!symlinkCheck.allowed) return `Error: ${symlinkCheck.reason}`;
+
+      // Write validation (size limit, dangerous extensions, content scanning)
+      const writeCheck = this.sandbox.checkWrite(file_path, content);
+      if (!writeCheck.allowed) return `Error: ${writeCheck.reason}`;
+      // Warnings are non-blocking but surfaced to the model
+      if (writeCheck.warnings?.length > 0) {
+        // Log warnings but proceed with write
+        this._writeWarnings = writeCheck.warnings;
+      }
     }
 
     try {
       const dir = path.dirname(file_path);
       await mkdir(dir, { recursive: true });
       await writeFile(file_path, content, 'utf-8');
-      return `Successfully wrote ${content.length} bytes to ${file_path}`;
+      let result = `Successfully wrote ${content.length} bytes to ${file_path}`;
+      if (this._writeWarnings?.length > 0) {
+        result += `\n⚠ Warnings:\n${this._writeWarnings.map(w => `  - ${w}`).join('\n')}`;
+        this._writeWarnings = null;
+      }
+      return result;
     } catch (err) {
       if (err.code === 'EACCES') {
         return `Error: Permission denied writing to: ${file_path}`;
@@ -679,6 +697,12 @@ export class ToolExecutor {
     // Command length limit — prevent absurdly long commands that may hide malicious content
     if (command.length > 100000) {
       return 'Error: Command too long (max 100,000 characters). Break into smaller commands.';
+    }
+
+    // Rate limiting check
+    if (this.sandbox?.enabled) {
+      const rateCheck = this.sandbox.checkRateLimit('bash');
+      if (!rateCheck.allowed) return `Error: ${rateCheck.reason}`;
     }
 
     // Sandbox: wrap command in isolation if enabled
@@ -1240,6 +1264,12 @@ export class ToolExecutor {
     if (this.sandbox?.enabled) {
       const check = this.sandbox.checkUrl(url);
       if (!check.allowed) return `Error: ${check.reason}`;
+
+      // Rate limiting for fetch
+      if (_redirectCount === 0) { // Only count the initial request, not redirects
+        const rateCheck = this.sandbox.checkRateLimit('fetch');
+        if (!rateCheck.allowed) return `Error: ${rateCheck.reason}`;
+      }
     }
 
     // SSRF protection: resolve hostname and block private/loopback addresses

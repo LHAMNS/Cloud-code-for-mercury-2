@@ -54,15 +54,19 @@ export const PERMISSION_DENY = "deny";
 export const MODE_READONLY = "readonly";
 export const MODE_APPROVAL = "approval";
 export const MODE_ACCEPT_EDITS = "acceptEdits";
+export const MODE_AI_SAFETY_DECIDE = "aiSafetyDecide";
 export const MODE_OPEN = "open";
 export const MODE_DONT_ASK = "dontAsk";
 
-export const VALID_MODES = [MODE_READONLY, MODE_APPROVAL, MODE_ACCEPT_EDITS, MODE_OPEN, MODE_DONT_ASK];
+export const VALID_MODES = [MODE_READONLY, MODE_APPROVAL, MODE_ACCEPT_EDITS, MODE_AI_SAFETY_DECIDE, MODE_OPEN, MODE_DONT_ASK];
 
 // Trust mode privilege levels (higher = more restricted).
 // Used by _clampTrustMode in subagent.js and mergePermissions here.
+// aiSafetyDecide sits between open (0) and acceptEdits (1) — nearly open but
+// with AI-powered safety review instead of user approval.
 export const TRUST_LEVELS = {
   [MODE_OPEN]: 0,
+  [MODE_AI_SAFETY_DECIDE]: 0.5,
   [MODE_ACCEPT_EDITS]: 1,
   [MODE_APPROVAL]: 2,
   [MODE_DONT_ASK]: 3,

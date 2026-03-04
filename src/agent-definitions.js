@@ -162,6 +162,13 @@ function loadAgentFromMarkdown(content, filePath) {
   if (!fm.name) {
     fm.name = path.basename(filePath, path.extname(filePath));
   }
+  // Sanitize agent name to prevent path traversal or injection
+  fm.name = fm.name.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+  const VALID_PERMISSION_MODES = ['open', 'aiSafetyDecide', 'acceptEdits', 'approval', 'dontAsk', 'readonly'];
+  if (fm.permissionMode && !VALID_PERMISSION_MODES.includes(fm.permissionMode)) {
+    fm.permissionMode = null; // Invalid mode, use default
+  }
 
   return {
     name: fm.name,
@@ -200,6 +207,11 @@ export async function discoverAgents(workspace) {
   // 3. Load project agents from .mercury/agents/ (overrides global)
   const projectDir = path.join(workspace, ".mercury", "agents");
   await _loadAgentsFromDir(projectDir, agents);
+
+  // Protect built-in agent names from being overridden by project definitions
+  for (const [name, def] of Object.entries(BUILTIN_AGENTS)) {
+    agents.set(name, { ...def }); // Re-set builtins to prevent project override
+  }
 
   return agents;
 }
@@ -283,13 +295,14 @@ export function matchAgentForTask(agents, task) {
   }
 
   // Check custom agents by description keywords
+  const STOP_WORDS = new Set(['the', 'a', 'an', 'and', 'or', 'in', 'on', 'at', 'to', 'for', 'of', 'is', 'it', 'this', 'that', 'with']);
   for (const [, def] of agents) {
     if (def.builtin) continue;
     if (def.description) {
       const descWords = def.description.toLowerCase().split(/\s+/);
-      const taskWords = lower.split(/\s+/);
+      const taskWords = lower.split(/\s+/).filter(w => w.length > 2 && !STOP_WORDS.has(w));
       const overlap = taskWords.filter((w) => descWords.includes(w)).length;
-      if (overlap >= 3) return def;
+      if (overlap >= 4) return def;
     }
   }
 

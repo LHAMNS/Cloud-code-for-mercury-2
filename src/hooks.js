@@ -111,9 +111,13 @@ export class HooksManager {
       if (!config.hooks || typeof config.hooks !== "object") return;
 
       for (const [event, handlers] of Object.entries(config.hooks)) {
-        if (!this._handlers.has(event)) continue;
+        if (!this._handlers.has(event)) {
+          if (this._onInfo) this._onInfo(`[Hooks] Warning: unknown event "${event}" in ${filePath} — skipped`);
+          continue;
+        }
         if (!Array.isArray(handlers)) continue;
 
+        const MAX_HOOK_TIMEOUT = 30000; // 30 seconds max
         for (const h of handlers) {
           const handler = {
             id: h.id || `${source}-${event}-${Date.now()}`,
@@ -123,8 +127,9 @@ export class HooksManager {
             prompt: h.prompt || null,
             fn: null,
             matcher: h.matcher || null,       // tool name or glob pattern to match
-            timeout: h.timeout || 10000,       // 10s default
+            timeout: Math.min(h.timeout || 10000, MAX_HOOK_TIMEOUT),
             source,
+            isProjectHook: (source === "project"),
           };
           this._handlers.get(event).push(handler);
         }
@@ -294,7 +299,7 @@ export class HooksManager {
         timeout,
         encoding: "utf-8",
         maxBuffer: 1024 * 1024, // 1MB
-        env: { ...process.env, MERCURY_HOOK_EVENT: event },
+        env: { ...this._sanitizeEnvForHooks(), MERCURY_HOOK_EVENT: event },
       }, (err, stdout, _stderr) => {
         if (err) {
           resolve({ action: "continue", error: err.message });
@@ -304,7 +309,11 @@ export class HooksManager {
         // Try to parse JSON response
         try {
           const result = JSON.parse(stdout.trim());
-          const action = VALID_ACTIONS.has(result.action) ? result.action : "continue";
+          let action = VALID_ACTIONS.has(result.action) ? result.action : "continue";
+          // Project hooks cannot bypass permissions via "allow" action
+          if (handler.isProjectHook && action === "allow") {
+            action = "continue"; // Downgrade to continue
+          }
           resolve({
             action,
             updatedInput: result.updatedInput || null,
@@ -323,6 +332,36 @@ export class HooksManager {
         child.stdin.end();
       }
     });
+  }
+
+  // ── Environment Sanitization ────────────────────────────────────────────
+
+  _sanitizeEnvForHooks() {
+    const env = {};
+    const SENSITIVE_PATTERNS = [
+      /^INCEPTION_API_KEY$/i,
+      /^MERCURY_API/i,
+      /KEY$/i,
+      /SECRET/i,
+      /TOKEN$/i,
+      /PASSWORD/i,
+      /^AWS_/i,
+      /^AZURE_/i,
+      /^GCP_/i,
+      /^GOOGLE_/i,
+      /^SSH_/i,
+      /^GPG_/i,
+      /^GITHUB_TOKEN$/i,
+      /^GH_TOKEN$/i,
+      /^NPM_TOKEN$/i,
+      /^NODE_OPTIONS$/i,
+    ];
+    for (const [key, value] of Object.entries(process.env)) {
+      if (!SENSITIVE_PATTERNS.some(p => p.test(key))) {
+        env[key] = value;
+      }
+    }
+    return env;
   }
 
   // ── Matcher ──────────────────────────────────────────────────────────────

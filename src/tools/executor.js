@@ -32,7 +32,7 @@ const SENSITIVE_ENV_PATTERNS = [
 const SAFE_ENV_ALLOWLIST = new Set([
   "PATH", "HOME", "USER", "SHELL", "LANG", "LC_ALL", "LC_CTYPE",
   "TERM", "TERM_PROGRAM", "EDITOR", "VISUAL", "PAGER",
-  "NODE_ENV", "NODE_PATH", "NODE_OPTIONS",
+  "NODE_ENV", "NODE_PATH",
   "TMPDIR", "TMP", "TEMP",
   "PWD", "OLDPWD", "SHLVL",
   "HOSTNAME", "LOGNAME", "XDG_RUNTIME_DIR", "XDG_DATA_HOME", "XDG_CONFIG_HOME",
@@ -87,6 +87,14 @@ const SUSPICIOUS_COMMAND_PATTERNS = [
  * @returns {boolean}
  */
 function _isPrivateIp(ip) {
+  // Handle IPv6-mapped IPv4 addresses (e.g., ::ffff:10.0.0.1)
+  if (ip.startsWith('::ffff:')) {
+    return _isPrivateIp(ip.slice(7));
+  }
+  // Reject non-standard IP representations (octal, hex, decimal)
+  if (/^0[0-7]/.test(ip) || /^0x/i.test(ip) || /^\d+$/.test(ip)) {
+    return true; // Block non-standard IP formats (could bypass checks)
+  }
   // IPv4 loopback
   if (ip === '127.0.0.1' || ip.startsWith('127.')) return true;
   // IPv6 loopback
@@ -103,7 +111,7 @@ function _isPrivateIp(ip) {
   if (ip.startsWith('fc') || ip.startsWith('fd')) return true;  // ULA
   if (ip.startsWith('fe80:')) return true;  // link-local
   // Unspecified
-  if (ip === '0.0.0.0' || ip === '::') return true;
+  if (ip === '0.0.0.0' || ip.startsWith('0.') || ip === '::') return true;
   // Metadata endpoints (cloud)
   if (ip === '169.254.169.254') return true;
   return false;
@@ -158,7 +166,8 @@ async function _checkSsrf(hostname) {
       }
     }
   } catch {
-    // DNS resolution failed — allow the request (it will fail at connect time)
+    // DNS resolution failed — fail closed for security
+    return { allowed: false, reason: `SSRF: DNS resolution failed for ${hostname}` };
   }
 
   return { allowed: true };
@@ -443,6 +452,18 @@ export class ToolExecutor {
     if (this.sandbox?.enabled) {
       const check = this.sandbox.checkPath(file_path, 'read');
       if (!check.allowed) return `Error: ${check.reason}`;
+    }
+
+    // Enforce workspace boundary even without sandbox
+    if (!this.sandbox?.enabled && !this._isInWorkspace(file_path)) {
+      return `Error: Cannot read file outside workspace: ${file_path}`;
+    }
+
+    if (this.sandbox?.enabled) {
+      const symlinkCheck = this.sandbox.checkSymlink(file_path);
+      if (!symlinkCheck.allowed) {
+        return `Error: ${symlinkCheck.reason}`;
+      }
     }
 
     let content;
@@ -1322,7 +1343,8 @@ export class ToolExecutor {
       return 'Error: url must start with http:// or https://';
     }
     // Block URLs with credentials (user:pass@host) — prevent credential smuggling
-    if (/@/.test(url.split('//')[1]?.split('/')[0] || '')) {
+    const authorityPart = url.split('//')[1]?.split('/')[0] || '';
+    if (authorityPart.includes('@') || decodeURIComponent(authorityPart).includes('@')) {
       return 'Error: URLs with embedded credentials are not allowed.';
     }
     if (_redirectCount > MAX_REDIRECTS) {
@@ -1540,10 +1562,18 @@ export class ToolExecutor {
     const { action, file_path, line, character, query } = args;
     if (!action) return 'Error: action is required (definition, references, hover, symbols, workspace_symbols, diagnostics).';
 
+    if (args.file_path && args.file_path.includes('\0')) {
+      return 'Error: Null bytes not allowed in file paths.';
+    }
+
     // Validate file_path is within workspace (LSP is read-only but should respect sandbox)
     if (file_path && this.sandbox?.enabled) {
       const check = this.sandbox.checkPath(file_path, 'read');
       if (!check.allowed) return `Error: ${check.reason}`;
+    }
+
+    if (args.file_path && !this.sandbox?.enabled && !this._isInWorkspace(args.file_path)) {
+      return `Error: Cannot access file outside workspace: ${args.file_path}`;
     }
 
     // Lazy init LspClient
@@ -1601,10 +1631,18 @@ export class ToolExecutor {
     const { action, query, kind, language, file_path } = args;
     if (!action) return 'Error: action is required (search or outline).';
 
+    if (args.file_path && args.file_path.includes('\0')) {
+      return 'Error: Null bytes not allowed in file paths.';
+    }
+
     // Validate file_path is within workspace if sandbox is active
     if (file_path && this.sandbox?.enabled) {
       const check = this.sandbox.checkPath(file_path, 'read');
       if (!check.allowed) return `Error: ${check.reason}`;
+    }
+
+    if (args.file_path && !this.sandbox?.enabled && !this._isInWorkspace(args.file_path)) {
+      return `Error: Cannot access file outside workspace: ${args.file_path}`;
     }
 
     try {

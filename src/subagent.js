@@ -50,6 +50,15 @@ let runningCount = 0;
 // Track background agents globally for retrieval/resume
 const _backgroundAgents = new Map();
 
+// Clean up completed background agents to prevent memory leaks
+function _cleanupBackgroundAgents() {
+  for (const [id, agent] of _backgroundAgents) {
+    if (agent._backgroundDone) {
+      _backgroundAgents.delete(id);
+    }
+  }
+}
+
 /**
  * Get a background agent by ID (for checking completion).
  * @param {string} agentId
@@ -102,6 +111,8 @@ export class SubAgent {
     const defTrust = options.agentDef?.permissionMode || null;
     this.trustMode = _clampTrustMode(parentTrust, defTrust);
     this.agentId = options.resume || options.agentId || `agent-${Date.now().toString(36)}`;
+    // Sanitize agentId to prevent path traversal
+    this.agentId = this.agentId.replace(/[^a-zA-Z0-9_-]/g, '_');
     this._isResume = !!options.resume;
     this._runInBackground = !!options.runInBackground;
     this._isolation = options.isolation || null;
@@ -184,11 +195,14 @@ export class SubAgent {
       return `Error: Maximum concurrent sub-agents (${MAX_CONCURRENT}) reached.`;
     }
 
+    runningCount++;
+
     // Setup worktree isolation if requested
     if (this._isolation === "worktree") {
       try {
         await this._setupWorktree();
       } catch (err) {
+        runningCount--;
         return `Error setting up worktree: ${err.message}`;
       }
     }
@@ -198,7 +212,6 @@ export class SubAgent {
 
     // Background mode: launch and return agentId immediately
     if (this._runInBackground) {
-      runningCount++;
       const agentId = this.agentId;
 
       // Create output file for background monitoring
@@ -222,6 +235,8 @@ export class SubAgent {
             const { appendFile } = await import("node:fs/promises");
             await appendFile(this._outputFile, `\n[${new Date().toISOString()}] Agent completed\n${result}\n`, "utf-8");
           } catch { /* non-critical */ }
+          this._backgroundDone = true;
+          _cleanupBackgroundAgents();
           return result;
         },
         async (err) => {
@@ -229,6 +244,8 @@ export class SubAgent {
           await this._cleanupWorktree();
           this._backgroundResult = `Background agent error: ${err.message}`;
           await this._hooks.fireSubagentStop(agentId, this._backgroundResult);
+          this._backgroundDone = true;
+          _cleanupBackgroundAgents();
           return this._backgroundResult;
         }
       );
@@ -237,7 +254,6 @@ export class SubAgent {
       return `Agent launched in background. agentId: ${agentId}\noutput_file: ${this._outputFile}\nResume later with: { "resume": "${agentId}", "task": "check results" }`;
     }
 
-    runningCount++;
     try {
       const result = await this._execute();
       await this._saveTranscript(result);
@@ -539,7 +555,7 @@ export class SubAgent {
         // ── Parallel tool execution ──
         // Read-only tools can safely run concurrently. Write tools run sequentially
         // to preserve ordering semantics and avoid race conditions.
-        const READ_ONLY_TOOLS = new Set(["read", "glob", "grep", "listdir", "diff", "lsp", "astsearch", "contextsearch"]);
+        const READ_ONLY_TOOLS = new Set(["read", "glob", "grep", "listdir", "diff", "lsp", "astsearch"]);
 
         // Phase 1: Pre-validate all tool calls (hooks, permissions)
         const validatedCalls = [];
@@ -576,16 +592,15 @@ export class SubAgent {
           }
           // In sub-agents, "ask" permission = deny (no user to approve)
           if (permCheck.decision === "ask" && hookResult.action !== "allow") {
-            if (this.trustMode === "approval") {
-              const errMsg = `Error: ${fnName} requires approval, not available to sub-agents in approval mode.`;
-              this._emit("tool_result", `${fnName} blocked`);
-              this.messages.push({ role: "tool", tool_call_id: tc.id, content: errMsg });
-              continue;
-            }
+            // Sub-agents cannot ask for user input - block the operation
+            const errMsg = `Error: Tool "${fnName}" requires user approval but sub-agents cannot prompt for it. Denied.`;
+            this._emit("tool_result", `${fnName} blocked`);
+            this.messages.push({ role: "tool", tool_call_id: tc.id, content: errMsg });
+            continue;
           }
 
-          // Block ALL Fetch in sub-agents (approval mode) — prevent data exfiltration
-          if (this.trustMode === "approval" && fnName.toLowerCase() === "fetch") {
+          // Block ALL Fetch in sub-agents (approval/acceptEdits/aiSafetyDecide modes) — prevent data exfiltration
+          if ((this.trustMode === "approval" || this.trustMode === "acceptEdits" || this.trustMode === "aiSafetyDecide") && fnName.toLowerCase() === "fetch") {
             const errMsg = "Error: Fetch is completely disabled for sub-agents in approval mode (prevents data exfiltration via URL query params or request body).";
             this._emit("tool_result", `${fnName} blocked`);
             this.messages.push({ role: "tool", tool_call_id: tc.id, content: errMsg });
@@ -621,10 +636,14 @@ export class SubAgent {
           for (const settled of readResults) {
             if (settled.status === "fulfilled") {
               const { tc, result } = settled.value;
+              // Escape fence markers in tool output to prevent fence escape injection
+              const safeResult = typeof result === 'string'
+                ? result.replace(/\[TOOL_OUTPUT_BEGIN/g, '[T00L_OUTPUT_BEGIN').replace(/\[TOOL_OUTPUT_END\]/g, '[T00L_OUTPUT_END]')
+                : result;
               this.messages.push({
                 role: "tool",
                 tool_call_id: tc.id,
-                content: `${FENCE_START}\n${result}\n${FENCE_END}`,
+                content: `${FENCE_START}\n${safeResult}\n${FENCE_END}`,
               });
             } else {
               // Should not happen, but handle gracefully
@@ -640,10 +659,14 @@ export class SubAgent {
         // Run write/mutating tools sequentially (order matters)
         for (const call of writeCalls) {
           const { tc, result } = await executeTool(call);
+          // Escape fence markers in tool output to prevent fence escape injection
+          const safeResult = typeof result === 'string'
+            ? result.replace(/\[TOOL_OUTPUT_BEGIN/g, '[T00L_OUTPUT_BEGIN').replace(/\[TOOL_OUTPUT_END\]/g, '[T00L_OUTPUT_END]')
+            : result;
           this.messages.push({
             role: "tool",
             tool_call_id: tc.id,
-            content: `${FENCE_START}\n${result}\n${FENCE_END}`,
+            content: `${FENCE_START}\n${safeResult}\n${FENCE_END}`,
           });
         }
 

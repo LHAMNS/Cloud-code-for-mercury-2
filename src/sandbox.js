@@ -256,8 +256,8 @@ export class Sandbox {
     this.workspace = options.workspace || process.cwd();
     this.sandboxSubAgents = options.sandboxSubAgents !== false;
     this.allowNetwork = options.allowNetwork !== false;
-    this.allowedDomains = options.allowedDomains || [];
-    this.additionalDenyPaths = options.additionalDenyPaths || [];
+    this.allowedDomains = [...(options.allowedDomains || [])];
+    this.additionalDenyPaths = [...(options.additionalDenyPaths || [])];
     this._capabilities = null;
 
     // ── New security features ──
@@ -276,8 +276,6 @@ export class Sandbox {
     this._rateBuckets = { bash: [], fetch: [] };
     // Security event log (in-memory, last 200 events)
     this._securityEvents = [];
-    // Nonce for tamper detection on sandbox config export
-    this._nonce = crypto.randomBytes(8).toString("hex");
   }
 
   /**
@@ -286,6 +284,11 @@ export class Sandbox {
    */
   init() {
     this._capabilities = detectCapabilities();
+
+    // Freeze critical security properties to prevent runtime tampering
+    Object.defineProperty(this, 'mode', { writable: false, configurable: false });
+    Object.defineProperty(this, 'workspace', { writable: false, configurable: false });
+
     return this;
   }
 
@@ -475,6 +478,10 @@ export class Sandbox {
    * @returns {{ allowed: boolean, reason?: string }}
    */
   checkPath(filePath, operation = "read") {
+    if (typeof filePath !== 'string' || filePath.includes('\0')) {
+      return { allowed: false, reason: 'Sandbox: path contains null bytes or is not a string' };
+    }
+
     if (!this.enabled) return { allowed: true };
 
     // Validate operation type
@@ -641,9 +648,9 @@ export class Sandbox {
     if (this.mode === SANDBOX_STRICT && this.allowedDomains.length > 0) {
       // Normalize domain: lowercase, strip trailing dot
       const domain = parsed.hostname.toLowerCase().replace(/\.$/, "");
-      const normalizedAllowlist = this.allowedDomains.map(
-        (d) => d.toLowerCase().replace(/\.$/, "")
-      );
+      const normalizedAllowlist = this.allowedDomains
+        .map(d => d.toLowerCase().replace(/\.$/, ""))
+        .filter(d => d.includes('.')); // Reject single-label domains
       const isAllowed = normalizedAllowlist.some(
         (d) => domain === d || domain.endsWith("." + d)
       );
@@ -783,6 +790,11 @@ export class Sandbox {
     if (!this.enabled) return { allowed: true };
 
     const warnings = [];
+
+    // Validate content type
+    if (typeof content !== 'string' && !Buffer.isBuffer(content)) {
+      return { allowed: false, reason: 'Sandbox: content must be a string or Buffer' };
+    }
 
     // 1. Check file size limit
     const size = typeof content === "string" ? Buffer.byteLength(content, "utf-8") : content.length;
@@ -931,6 +943,7 @@ export class Sandbox {
    * Escape a string for safe use in shell commands.
    */
   _shellEscape(str) {
+    str = String(str).replace(/\0/g, '');
     return "'" + str.replace(/'/g, "'\\''") + "'";
   }
 }

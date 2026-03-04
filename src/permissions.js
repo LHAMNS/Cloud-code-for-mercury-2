@@ -205,7 +205,7 @@ export class PermissionManager {
       }
       // Enterprise can disable permissive modes — downgrade any mode
       // less restrictive than approval to approval
-      if (managed.disableBypassPermissionsMode === "disable") {
+      if (managed.disableBypassPermissionsMode) {
         if (TRUST_LEVELS[this.trustMode] < TRUST_LEVELS[MODE_APPROVAL]) {
           this.trustMode = MODE_APPROVAL;
         }
@@ -220,13 +220,13 @@ export class PermissionManager {
    */
   _mergeRules(config) {
     if (Array.isArray(config.allow)) {
-      this.allowRules.push(...config.allow);
-    }
-    if (Array.isArray(config.ask)) {
-      this.askRules.push(...config.ask);
+      this.allowRules.push(...config.allow.filter(r => typeof r === 'string'));
     }
     if (Array.isArray(config.deny)) {
-      this.denyRules.push(...config.deny);
+      this.denyRules.push(...config.deny.filter(r => typeof r === 'string'));
+    }
+    if (Array.isArray(config.ask)) {
+      this.askRules.push(...config.ask.filter(r => typeof r === 'string'));
     }
   }
 
@@ -471,9 +471,21 @@ export class PermissionManager {
    * @returns {boolean}
    */
   _matchBashSegments(specifier, command, isDenyRule = false) {
+    // For deny rules, also check for dangerous shell metacharacters that could hide commands
+    if (isDenyRule) {
+      // Check if any deny pattern matches through command substitution, backticks, or subshells
+      const strippedCmd = command
+        .replace(/\$\([^)]*\)/g, ' ')  // Remove $(...)
+        .replace(/`[^`]*`/g, ' ')      // Remove backticks
+        .replace(/\([^)]*\)/g, ' ');    // Remove subshells
+      if (strippedCmd !== command && this._globMatch(specifier, command)) {
+        return true; // The full command matches and contains shell metacharacters
+      }
+    }
+
     // Split at shell operators: &&, ||, ;, | (but not ||= or &&=)
     const segments = command
-      .split(/\s*(?:&&|\|\||[;|])\s*/)
+      .split(/\s*(?:&&|\|\||[;\n|])\s*/)
       .map((s) => s.trim())
       .filter(Boolean);
 
@@ -570,8 +582,9 @@ export class PermissionManager {
   toConfig() {
     return {
       allow: [...this.allowRules],
-      ask: [...this.askRules],
       deny: [...this.denyRules],
+      ask: [...this.askRules],
+      _managedDenyRules: this._managedDenyRules ? [...this._managedDenyRules] : [],
     };
   }
 
@@ -580,9 +593,12 @@ export class PermissionManager {
    * @param {object} config
    */
   fromConfig(config) {
-    if (config.allow) this.allowRules = [...config.allow];
-    if (config.ask) this.askRules = [...config.ask];
-    if (config.deny) this.denyRules = [...config.deny];
+    if (config.allow) this.allowRules = [...config.allow].filter(r => typeof r === 'string');
+    if (config.deny) this.denyRules = [...config.deny].filter(r => typeof r === 'string');
+    if (config.ask) this.askRules = [...config.ask].filter(r => typeof r === 'string');
+    if (config._managedDenyRules && Array.isArray(config._managedDenyRules)) {
+      this._managedDenyRules = new Set(config._managedDenyRules);
+    }
     this._loaded = true;
   }
 
@@ -634,10 +650,10 @@ export class PermissionManager {
    * @param {string} rule - The rule string to remove
    */
   removeRule(rule) {
+    // Check if this is a managed deny rule (protected from removal)
+    if (this._managedDenyRules?.has(rule)) return;
     this.allowRules = this.allowRules.filter((r) => r !== rule);
     this.askRules = this.askRules.filter((r) => r !== rule);
-    // Managed deny rules are protected — cannot be removed at runtime
-    if (this._managedDenyRules?.has(rule)) return;
     this.denyRules = this.denyRules.filter((r) => r !== rule);
   }
 }

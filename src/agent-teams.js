@@ -110,6 +110,9 @@ export class AgentTeam {
    * @returns {TeamTask}
    */
   addTask(taskDef) {
+    if (this.tasks.size >= 1000) {
+      throw new Error('Maximum task limit (1000) reached');
+    }
     this._taskIdCounter++;
     const task = {
       id: `task-${this._taskIdCounter}`,
@@ -122,6 +125,23 @@ export class AgentTeam {
       createdAt: Date.now(),
       completedAt: null,
     };
+    // Check for circular dependencies
+    if (taskDef.depends && taskDef.depends.length > 0) {
+      const visited = new Set();
+      const checkCycle = (id) => {
+        if (id === task.id) return true; // Cycle detected
+        if (visited.has(id)) return false;
+        visited.add(id);
+        const depTask = this.tasks.get(id);
+        if (!depTask || !depTask.depends) return false;
+        return depTask.depends.some(d => checkCycle(d));
+      };
+      for (const depId of taskDef.depends) {
+        if (depId === task.id || checkCycle(depId)) {
+          throw new Error(`Circular dependency detected: task "${task.id}" and "${depId}"`);
+        }
+      }
+    }
     this.tasks.set(task.id, task);
     this._emit("task_added", { taskId: task.id, title: task.title });
     this._persist();
@@ -259,6 +279,9 @@ export class AgentTeam {
    * @param {string} content
    */
   sendMessage(from, to, content) {
+    if (this.mailbox.length >= 5000) {
+      return; // Silently drop messages when mailbox is full
+    }
     const msg = { from, to, content, ts: Date.now() };
     this.mailbox.push(msg);
     this._emit("message_sent", msg);
@@ -271,6 +294,9 @@ export class AgentTeam {
    * @param {string} content
    */
   broadcast(from, content) {
+    if (this.mailbox.length >= 5000) {
+      return; // Silently drop messages when mailbox is full
+    }
     // Send a single "all" message so getMessages() can find it
     const msg = { from, to: "all", content, ts: Date.now() };
     this.mailbox.push(msg);
@@ -300,9 +326,16 @@ export class AgentTeam {
     this._running = true;
     this._emit("team_start", { teamName: this.teamName, tasks: this.tasks.size, teammates: this.teammates.size });
 
+    const MAX_RUN_TIMEOUT = 600000; // 10 minutes max
+    const runStart = Date.now();
+
     const results = new Map();
 
     while (this._running) {
+      if (Date.now() - runStart > MAX_RUN_TIMEOUT) {
+        this.stop();
+        break;
+      }
       // Check if all tasks are done
       const summary = this.getTaskSummary();
       if (summary.pending.length === 0 && summary.inProgress.length === 0) {
@@ -389,7 +422,7 @@ export class AgentTeam {
         const dep = this.tasks.get(depId);
         if (dep?.result) {
           lines.push(`\n### ${dep.title}:`);
-          lines.push(dep.result);
+          lines.push(`[DEP_RESULT_BEGIN]\n${dep.result}\n[DEP_RESULT_END]`);
         }
       }
       lines.push("");
@@ -401,7 +434,7 @@ export class AgentTeam {
       lines.push("## Messages from team:");
       for (const msg of messages) {
         const sender = msg.from === "lead" ? "Team Lead" : this.teammates.get(msg.from)?.name || msg.from;
-        lines.push(`[${sender}]: ${msg.content}`);
+        lines.push(`[${sender}]: [MESSAGE_BEGIN]\n${msg.content}\n[MESSAGE_END]`);
       }
       lines.push("");
     }
@@ -441,8 +474,12 @@ export class AgentTeam {
     try {
       const data = await readFile(path.join(this._teamDir, "state.json"), "utf-8");
       const state = JSON.parse(data);
-      this.tasks = new Map(state.tasks || []);
-      this.mailbox = state.mailbox || [];
+      // Validate state structure
+      if (!Array.isArray(state.tasks) || !Array.isArray(state.mailbox)) {
+        return; // Invalid state, start fresh
+      }
+      this.tasks = new Map(state.tasks.filter(([id, t]) => typeof id === 'string' && t && typeof t.status === 'string'));
+      this.mailbox = state.mailbox.filter(m => m && typeof m.content === 'string');
       this._taskIdCounter = state.taskIdCounter || 0;
       return true;
     } catch {

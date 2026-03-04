@@ -39,7 +39,7 @@ function printUsage() {
   -p, --prompt <text>       Run in non-interactive (single-shot) mode
       --plan                Start in plan mode (read-only, creates a plan file)
       --trust-mode <mode>   Permission mode: readonly, approval (default),
-                            acceptEdits, open, dontAsk
+                            acceptEdits, open, dontAsk, aiSafetyDecide
       --mcp-config <path>   Path to MCP servers config file
 
 \x1b[1mExamples:\x1b[0m

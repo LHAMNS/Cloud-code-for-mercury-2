@@ -1359,7 +1359,7 @@ export class MercuryRepl {
           printInfo(`Trust: ${this._trustLabel(this.trustMode)}`);
           printInfo(`Plan mode: ${this.planMode ? "ON" : "OFF"}`);
           printInfo(`Outside workspace: ${this.allowOutsideWorkspace ? "allowed" : "blocked"}`);
-          printInfo("Usage: /trust readonly|approval|acceptedits|open|dontask|plan|outside");
+          printInfo("Usage: /trust readonly|approval|acceptedits|open|dontask|aisafetydecide|plan|outside");
           break;
         }
         if (mode === "readonly" || mode === "1") { this.trustMode = TRUST_READONLY; this.planMode = false; }

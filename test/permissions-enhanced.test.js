@@ -43,6 +43,7 @@ describe("Permission modes (6-mode system)", () => {
     assert.ok(VALID_MODES.includes(MODE_ACCEPT_EDITS));
     assert.ok(VALID_MODES.includes(MODE_OPEN));
     assert.ok(VALID_MODES.includes(MODE_DONT_ASK));
+    assert.ok(VALID_MODES.includes(MODE_AI_SAFETY_DECIDE));
   });
 
   it("MODE_OPEN allows everything", () => {

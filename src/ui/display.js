@@ -575,7 +575,7 @@ export function printHelp() {
       ["/exit", "Exit Mercury Code"],
     ]],
     ["Security & Workspace", [
-      ["/trust <mode>", "readonly | approval | open | outside"],
+      ["/trust <mode>", "readonly | approval | acceptEdits | dontAsk | aiSafetyDecide | open | plan | outside"],
       ["/workspace <path>", "View/change workspace directory"],
       ["/login <key>", "Set API key"],
       ["/logout", "Clear API key"],

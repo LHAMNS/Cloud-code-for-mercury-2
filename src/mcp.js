@@ -295,7 +295,7 @@ class McpServer {
     if (this._process) {
       try {
         this._process.stdin.end();
-        this._process.kill("SIGTERM");
+        this._process.kill(process.platform === "win32" ? "SIGKILL" : "SIGTERM");
       } catch {
         // Already dead
       }

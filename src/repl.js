@@ -502,7 +502,7 @@ export class MercuryRepl {
    * @returns {string|null} The composed text, or null if cancelled.
    */
   _openEditor() {
-    const editor = process.env.VISUAL || process.env.EDITOR || "vi";
+    const editor = process.env.VISUAL || process.env.EDITOR || (process.platform === "win32" ? "notepad" : "vi");
     const tmpFile = path.join(os.tmpdir(), `mercury-input-${Date.now()}.md`);
 
     try {
@@ -510,7 +510,7 @@ export class MercuryRepl {
       fs.writeFileSync(tmpFile, "# Type your message below. Save and close the editor to submit.\n# Lines starting with # will be stripped.\n\n");
 
       // Open editor (blocking)
-      _execSync(`${editor} ${tmpFile}`, { stdio: "inherit" });
+      _execSync(`${editor} "${tmpFile}"`, { stdio: "inherit" });
 
       // Read the result
       const content = fs.readFileSync(tmpFile, "utf-8");
@@ -691,7 +691,7 @@ export class MercuryRepl {
 
     // Backslash alone → open $EDITOR for multiline input
     if (trimmed === "\\") {
-      printInfo(`Opening ${process.env.VISUAL || process.env.EDITOR || "vi"} for multiline input...`);
+      printInfo(`Opening ${process.env.VISUAL || process.env.EDITOR || (process.platform === "win32" ? "notepad" : "vi")} for multiline input...`);
       const editorText = this._openEditor();
       if (!editorText) {
         printInfo("Editor cancelled (empty input).");
@@ -1458,7 +1458,7 @@ export class MercuryRepl {
         break;
 
       case "/edit": {
-        printInfo(`Opening ${process.env.VISUAL || process.env.EDITOR || "vi"} for multiline input...`);
+        printInfo(`Opening ${process.env.VISUAL || process.env.EDITOR || (process.platform === "win32" ? "notepad" : "vi")} for multiline input...`);
         const editorText = this._openEditor();
         if (!editorText) {
           printInfo("Editor cancelled (empty input).");
@@ -2430,8 +2430,8 @@ export class MercuryRepl {
 
     if (subCmd === "edit") {
       try {
-        const editor = process.env.VISUAL || process.env.EDITOR || "vi";
-        _execSync(`${editor} ${memPath}`, { stdio: "inherit", timeout: 300000 });
+        const editor = process.env.VISUAL || process.env.EDITOR || (process.platform === "win32" ? "notepad" : "vi");
+        _execSync(`${editor} "${memPath}"`, { stdio: "inherit", timeout: 300000 });
         printSuccess("Memory file updated.");
       } catch (err) {
         printError(`Editor error: ${err.message}`);

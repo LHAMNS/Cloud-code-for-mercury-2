@@ -270,14 +270,16 @@ export class LspClient {
   _findCmd() {
     const config = this._config;
     try {
-      // Use execFileSync to avoid shell injection — "which" receives cmd as a safe argv element
-      execFileSync("which", [config.cmd], { stdio: "pipe", timeout: 5000 });
+      // Use execFileSync to avoid shell injection — receives cmd as a safe argv element
+      const whichCmd = process.platform === "win32" ? "where" : "which";
+      execFileSync(whichCmd, [config.cmd], { stdio: "pipe", timeout: 5000 });
       return config.cmd;
     } catch {
       // Try fallback
       if (config.fallbackCmd) {
         try {
-          execFileSync("which", [config.fallbackCmd], { stdio: "pipe", timeout: 5000 });
+          const whichCmd = process.platform === "win32" ? "where" : "which";
+          execFileSync(whichCmd, [config.fallbackCmd], { stdio: "pipe", timeout: 5000 });
           return config.fallbackCmd;
         } catch {
           return null;

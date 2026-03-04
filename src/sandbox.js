@@ -695,7 +695,8 @@ export class Sandbox {
         const realTarget = fs.realpathSync(filePath);
         const wsResolved = path.resolve(this.workspace);
         const inWorkspace = realTarget === wsResolved || realTarget.startsWith(wsResolved + path.sep);
-        const inTmp = realTarget.startsWith("/tmp" + path.sep) || realTarget === "/tmp";
+        const tmpDir = process.platform === "win32" ? (process.env.TEMP || process.env.TMP || "C:\\Temp") : "/tmp";
+        const inTmp = realTarget.startsWith(tmpDir + path.sep) || realTarget === tmpDir;
 
         if (!inWorkspace && !inTmp) {
           this._logSecurityEvent("symlink_escape", `${filePath} → ${realTarget}`);
@@ -713,7 +714,8 @@ export class Sandbox {
         const ancestorResolved = this._resolveViaAncestor(filePath);
         const wsResolved = path.resolve(this.workspace);
         const inWorkspace = ancestorResolved === wsResolved || ancestorResolved.startsWith(wsResolved + path.sep);
-        const inTmp = ancestorResolved.startsWith("/tmp" + path.sep) || ancestorResolved === "/tmp";
+        const tmpDir = process.platform === "win32" ? (process.env.TEMP || process.env.TMP || "C:\\Temp") : "/tmp";
+        const inTmp = ancestorResolved.startsWith(tmpDir + path.sep) || ancestorResolved === tmpDir;
         if (!inWorkspace && !inTmp) {
           this._logSecurityEvent("symlink_escape_newpath", `${filePath} → ${ancestorResolved}`);
           return {

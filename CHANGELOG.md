@@ -40,8 +40,25 @@
 - All system prompt sections wrapped in semantic XML tags: `<identity>`, `<tools>`, `<behavior>`, `<rules>`, `<safety>`, `<workspace-boundary>`, `<operational-safety>`, `<prompt-injection-defense>`, `<context-management>`, `<compression>`, `<context-editing>`, `<memory-and-config>`, `<hooks>`, `<permission-rules>`, `<environment>`, `<sandbox>`, `<permissions>`.
 - Original content fully preserved — XML tags added for improved model comprehension without content changes.
 
+### Deep Security Audit (56 fixes across 8 files)
+- **sandbox.js**: Null-byte/type validation in checkPath, null-byte in _shellEscape, content type validation, property freezing after init, defensive array copies, domain validation, mode validation, checkSymlink fixes, Buffer content scanning, strict mode secret blocking, rate limit opType validation
+- **permissions.js**: Command substitution detection, newline segmentation, managed rules serialization, input validation, removeRule fix, disableBypass truthy check
+- **executor.js**: IPv6-mapped IP bypass, DNS fail-closed, removed NODE_OPTIONS, workspace boundary for _readFile, symlink check for _readFile, IP octal/hex/decimal blocking, 0.0.0.0/8 range, null bytes in LSP/AstSearch, workspace checks in LSP/AstSearch, URL credential bypass fix
+- **subagent.js**: Agent ID sanitization, runningCount race fix, Fetch blocking extended to acceptEdits/aiSafetyDecide, background agent cleanup, universal ask-decision blocking, fence marker sanitization, ContextSearch removed from READ_ONLY_TOOLS
+- **hooks.js**: Env var sanitization (strip API keys/secrets), 30s timeout cap, project hook marking, prevent project hooks from "allow" bypass, unknown event warnings
+- **agent-teams.js**: Circular dependency detection, task limit (1000), mailbox limit (5000), execution timeout (10 min), state validation on load, content fences for dependency results/messages
+- **agent-definitions.js**: Prevent project override of built-in agents, permissionMode validation, name sanitization, matchAgentForTask hardened with stop words and threshold
+- **ai-safety-decide.js**: toolName/workspace sanitization, cache TTL (5 min), non-greedy JSON regex, userTask in cache key, Promise.race timeout enforcement, privilege-escalation criterion
+
+### AiSafetyDecider Runtime Integration
+- **cli.js**: Added `aiSafetyDecide` to `--trust-mode` valid modes and help text
+- **repl.js**: Import, instantiate, and wire AiSafetyDecider into _checkPermission and tool execution loop
+- **Decision flow**: Read tools pass through → non-read tools flagged `needsAiSafety` → DENY blocks, ESCALATE asks user, ALLOW proceeds
+- **/trust command**: Option 6 (`aisafetydecide`) with lazy instantiation on mode switch
+- **Help text**: All 8 trust modes documented in CLI help, /trust usage, and /help output
+
 ### Test Suite
-- **448 tests** across 116 test suites (+33 new tests), covering:
+- **464 tests** across 122 test suites (+49 new tests), covering:
   - Hardened checkPath: operation validation, strict boundary enforcement, symlink escape detection, new sensitive paths
   - Hardened checkUrl: localhost HTTP blocked in strict, allowNetwork=false, case normalization, trailing dot normalization
   - Sandbox rate limiting: within/exceeding limits, retry-after time, disabled when off
@@ -49,8 +66,12 @@
   - Sandbox symlink policy: block/allow/resolve policies
   - Security event logging: event capture, export, summary statistics
   - Config serialization with new security features
-  - AI Safety Decide mode: 6-mode permission system, trust level ordering
+  - AI Safety Decide mode: 6-mode permission system, trust level ordering, deny rule respect
   - System prompt: XML-structured trust modes (readonly, approval, open, aiSafetyDecide)
+  - URL protocol enforcement (file://, ftp:// blocked)
+  - Null byte rejection in ListDir, Glob, Grep
+  - Deny rule compound command detection (&&, ;, |)
+  - Managed deny rule removal protection
 
 ## v1.3.0 (2026-03-03)
 

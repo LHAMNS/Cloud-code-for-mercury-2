@@ -318,11 +318,11 @@ describe("CLI flags (v1.3.0)", () => {
 
 // ── Package.json Tests ─────────────────────────────────────────────────────
 
-describe("Package.json (v1.3.0)", () => {
+describe("Package.json (v1.4.0)", () => {
   it("should have correct version", async () => {
     const fs = await import("node:fs");
     const pkg = JSON.parse(fs.readFileSync("package.json", "utf-8"));
-    assert.strictEqual(pkg.version, "1.3.0");
+    assert.strictEqual(pkg.version, "1.4.0");
   });
 
   it("should have mercury binary entries", async () => {

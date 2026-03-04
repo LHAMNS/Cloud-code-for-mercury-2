@@ -96,6 +96,18 @@ const SENSITIVE_PATHS = [
   ".config/op",
   // Bitwarden CLI
   ".config/Bitwarden CLI",
+  // GitHub CLI credentials
+  ".config/gh/hosts.yml",
+  // Heroku CLI
+  ".config/heroku",
+  // Poetry auth
+  ".config/poetry/auth.toml",
+  // Podman/container credentials
+  ".config/containers/auth.json",
+  // rclone cloud storage credentials
+  ".config/rclone/rclone.conf",
+  // Hub CLI token
+  ".config/hub",
 ];
 
 // System paths that should never be written to
@@ -124,6 +136,12 @@ const DANGEROUS_WRITE_EXTENSIONS = new Set([
   ".scr", ".pif", ".msi", ".msp",
   ".cpl", ".hta", ".inf", ".reg",
   ".elf", ".ko", ".sys",
+  // macOS executables
+  ".app", ".command", ".dmg",
+  // Linux packages/services
+  ".deb", ".rpm", ".desktop", ".service",
+  // Java archives
+  ".jar", ".war",
 ]);
 
 // ── Content secret patterns ──────────────────────────────────────────────────
@@ -142,6 +160,16 @@ const SECRET_CONTENT_PATTERNS = [
   /xox[bporas]-[0-9]+-[A-Za-z0-9-]+/,
   // Generic JWT
   /eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/,
+  // Stripe keys
+  /sk_(?:live|test)_[A-Za-z0-9]{20,}/,
+  // SendGrid keys
+  /SG\.[A-Za-z0-9_-]{22,}\.[A-Za-z0-9_-]{22,}/,
+  // npm tokens
+  /npm_[A-Za-z0-9]{36,}/,
+  // PyPI tokens
+  /pypi-[A-Za-z0-9_-]{50,}/,
+  // Google service account
+  /"type"\s*:\s*"service_account"/,
 ];
 
 // ── Sandbox capability detection ─────────────────────────────────────────────
@@ -578,6 +606,16 @@ export class Sandbox {
       };
     }
 
+    // Protocol enforcement — only http: and https: allowed (defense-in-depth).
+    // Blocks file://, ftp://, data://, javascript:, etc. in all modes.
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      this._logSecurityEvent("protocol_blocked", `${parsed.protocol} ${url}`);
+      return {
+        allowed: false,
+        reason: `Sandbox: protocol ${parsed.protocol} is not allowed (only http/https)`,
+      };
+    }
+
     // Block non-HTTPS in strict mode — NO localhost exception
     // (localhost HTTP can be used for SSRF to cloud metadata endpoints etc.)
     if (this.mode === SANDBOX_STRICT) {
@@ -657,7 +695,12 @@ export class Sandbox {
         // Path doesn't exist yet — allow (will be created)
         return { allowed: true, resolvedPath: filePath };
       }
-      // Other errors — allow and let downstream handle
+      // Other errors (EACCES, EIO, etc.) — deny for safety
+      this._logSecurityEvent("symlink_error", `${filePath}: ${err.code || err.message}`);
+      return {
+        allowed: false,
+        reason: `Sandbox: cannot verify symlink status for ${filePath} (${err.code || err.message})`,
+      };
     }
 
     return { allowed: true, resolvedPath: filePath };

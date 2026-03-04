@@ -166,9 +166,15 @@ export class PermissionManager {
       if (settings.permissions) {
         this._mergeRules(settings.permissions);
       }
-      // Apply defaultMode if specified
+      // Apply defaultMode if specified — but only if it's MORE restrictive
+      // than the current trust mode (prevents project settings from escalating
+      // a CLI-provided --trust-mode to a more permissive level)
       if (settings.defaultMode && VALID_MODES.includes(settings.defaultMode)) {
-        this.trustMode = settings.defaultMode;
+        const newLevel = TRUST_LEVELS[settings.defaultMode] ?? 2;
+        const currentLevel = TRUST_LEVELS[this.trustMode] ?? 2;
+        if (newLevel >= currentLevel) {
+          this.trustMode = settings.defaultMode;
+        }
       }
     } catch {
       // File doesn't exist or invalid — OK
@@ -183,19 +189,24 @@ export class PermissionManager {
       const data = await readFile(filePath, "utf-8");
       const managed = JSON.parse(data);
       if (managed.permissions) {
-        // Managed deny rules are always additive
+        // Managed deny rules are always additive and protected from removeRule()
         if (Array.isArray(managed.permissions.deny)) {
           this.denyRules.push(...managed.permissions.deny);
+          // Track managed deny rules so removeRule() cannot remove them
+          if (!this._managedDenyRules) this._managedDenyRules = new Set();
+          for (const rule of managed.permissions.deny) {
+            this._managedDenyRules.add(rule);
+          }
         }
         // Managed can also set allow/ask
         if (Array.isArray(managed.permissions.allow)) {
           this.allowRules.push(...managed.permissions.allow);
         }
       }
-      // Enterprise can disable modes
+      // Enterprise can disable permissive modes — downgrade any mode
+      // less restrictive than approval to approval
       if (managed.disableBypassPermissionsMode === "disable") {
-        // If current mode is open, downgrade to approval
-        if (this.trustMode === MODE_OPEN) {
+        if (TRUST_LEVELS[this.trustMode] < TRUST_LEVELS[MODE_APPROVAL]) {
           this.trustMode = MODE_APPROVAL;
         }
       }
@@ -236,7 +247,7 @@ export class PermissionManager {
   check(toolName, toolInput = {}, context = {}) {
     // 1. Check deny rules first (highest priority)
     for (const rule of this.denyRules) {
-      if (this._matches(rule, toolName, toolInput)) {
+      if (this._matches(rule, toolName, toolInput, { isDenyRule: true })) {
         this._audit(toolName, PERMISSION_DENY, rule, "deny_rule", context);
         return { decision: PERMISSION_DENY, rule, source: "deny_rule" };
       }
@@ -277,8 +288,9 @@ export class PermissionManager {
     // Run synchronous checks first
     const syncResult = this.check(toolName, toolInput, context);
 
-    // If denied by rule, don't call callback
-    if (syncResult.decision === PERMISSION_DENY && syncResult.source === "deny_rule") {
+    // If denied (by any source — deny rules, mode defaults, etc.), don't allow callback override.
+    // This prevents canUseTool callbacks from overriding mode-based denials (readonly, dontAsk).
+    if (syncResult.decision === PERMISSION_DENY) {
       return syncResult;
     }
 
@@ -329,6 +341,11 @@ export class PermissionManager {
     switch (this.trustMode) {
       // ── open: everything allowed ──
       case MODE_OPEN:
+        return { decision: PERMISSION_ALLOW };
+
+      // ── aiSafetyDecide: all tools allowed at permission level ──
+      // (actual safety enforcement happens via the AI safety judge callback)
+      case MODE_AI_SAFETY_DECIDE:
         return { decision: PERMISSION_ALLOW };
 
       // ── acceptEdits: auto-approve file edits, ask for Bash/Fetch ──
@@ -384,7 +401,7 @@ export class PermissionManager {
    * @param {object} toolInput
    * @returns {boolean}
    */
-  _matches(rule, toolName, toolInput) {
+  _matches(rule, toolName, toolInput, options = {}) {
     const parenIdx = rule.indexOf("(");
     let ruleToolName, specifier;
 
@@ -413,7 +430,7 @@ export class PermissionManager {
     // For Bash commands, decompose at shell operators and check each segment.
     // This prevents "git status && rm -rf /" matching a "Bash(git *)" allow rule.
     if (toolName.toLowerCase() === "bash") {
-      return this._matchBashSegments(specifier, primaryArg);
+      return this._matchBashSegments(specifier, primaryArg, options.isDenyRule);
     }
 
     return this._globMatch(specifier, primaryArg);
@@ -453,7 +470,7 @@ export class PermissionManager {
    * @param {string} command - The full bash command
    * @returns {boolean}
    */
-  _matchBashSegments(specifier, command) {
+  _matchBashSegments(specifier, command, isDenyRule = false) {
     // Split at shell operators: &&, ||, ;, | (but not ||= or &&=)
     const segments = command
       .split(/\s*(?:&&|\|\||[;|])\s*/)
@@ -465,7 +482,14 @@ export class PermissionManager {
       return this._globMatch(specifier, command);
     }
 
-    // Every segment must match the specifier
+    // For deny rules: ANY segment matching is sufficient to deny.
+    // This prevents "echo noop && rm -rf /" bypassing a "Bash(rm -rf *)" deny rule.
+    if (isDenyRule) {
+      return segments.some((seg) => this._globMatch(specifier, seg));
+    }
+
+    // For allow/ask rules: ALL segments must match the specifier.
+    // This prevents "git status && rm -rf /" matching a "Bash(git *)" allow rule.
     return segments.every((seg) => this._globMatch(specifier, seg));
   }
 
@@ -606,11 +630,14 @@ export class PermissionManager {
 
   /**
    * Remove a rule dynamically at runtime.
+   * Managed (enterprise) deny rules cannot be removed.
    * @param {string} rule - The rule string to remove
    */
   removeRule(rule) {
     this.allowRules = this.allowRules.filter((r) => r !== rule);
     this.askRules = this.askRules.filter((r) => r !== rule);
+    // Managed deny rules are protected — cannot be removed at runtime
+    if (this._managedDenyRules?.has(rule)) return;
     this.denyRules = this.denyRules.filter((r) => r !== rule);
   }
 }

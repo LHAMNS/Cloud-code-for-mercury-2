@@ -207,23 +207,32 @@ export class AiSafetyDecider {
       .map(m => `[${m.role}]: ${typeof m.content === "string" ? m.content.slice(0, 500) : "(tool call)"}`)
       .join("\n");
 
-    // Format tool arguments for display
+    // Format tool arguments for display — sanitize to prevent XML/prompt injection.
+    // Replace sequences that could close XML tags or inject fake evaluation responses.
+    const sanitize = (s) => s
+      .replace(/</g, "＜")
+      .replace(/>/g, "＞")
+      .replace(/\{[\s]*"decision"/gi, '{ "sanitized_decision"');
+
     const argsDisplay = Object.entries(toolArgs)
       .map(([k, v]) => {
         const val = typeof v === "string" && v.length > 300 ? v.slice(0, 300) + "...[truncated]" : JSON.stringify(v);
-        return `  ${k}: ${val}`;
+        return `  ${sanitize(k)}: ${sanitize(val)}`;
       })
       .join("\n");
+
+    const safeTask = sanitize(userTask || "(no task specified)");
+    const safeHistory = sanitize(historySnippet || "(no history available)");
 
     return `<evaluation-request>
 <workspace>${this.workspace}</workspace>
 
 <user-task>
-${userTask || "(no task specified)"}
+${safeTask}
 </user-task>
 
 <recent-conversation>
-${historySnippet || "(no history available)"}
+${safeHistory}
 </recent-conversation>
 
 <proposed-tool-call>
@@ -297,7 +306,14 @@ Evaluate whether this tool call is safe, reasonable, and compliant. Respond with
    */
   _getCacheKey(toolName, toolArgs) {
     const argsKey = JSON.stringify(toolArgs);
-    return `${toolName}:${argsKey.slice(0, 200)}`;
+    // Use a hash of the full serialized args to prevent cache collisions
+    // from truncation. Simple FNV-1a hash for performance.
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < argsKey.length; i++) {
+      hash ^= argsKey.charCodeAt(i);
+      hash = (hash * 0x01000193) >>> 0;
+    }
+    return `${toolName}:${hash.toString(16)}:${argsKey.slice(0, 100)}`;
   }
 
   /**

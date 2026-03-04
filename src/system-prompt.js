@@ -241,6 +241,14 @@ AI Safety Decide mode is active. All tool calls (including Write, Edit, Patch, B
       return `<permissions mode="open">
 All operations are allowed within the workspace. File writes/edits/patches outside the workspace are blocked. Bash commands execute with the workspace as cwd.
 </permissions>`;
+    case "acceptEdits":
+      return `<permissions mode="acceptEdits">
+Read and search operations are always allowed. Write/Edit/Patch are auto-approved within the workspace. Bash, Fetch, SubAgent, SubAgentTeam, and AgentTeams require explicit user approval. File operations outside the workspace are blocked.
+</permissions>`;
+    case "dontAsk":
+      return `<permissions mode="dontAsk">
+Read and search operations are always allowed. All other operations (Write, Edit, Patch, Bash, Fetch, SubAgent, SubAgentTeam, AgentTeams) are automatically denied unless explicitly pre-approved via allow rules. Do not attempt to use tools that will be denied.
+</permissions>`;
     case "approval":
     default:
       return `<permissions mode="approval">

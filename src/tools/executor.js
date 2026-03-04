@@ -614,6 +614,10 @@ export class ToolExecutor {
     if (this.sandbox?.enabled) {
       const check = this.sandbox.checkPath(file_path, 'write');
       if (!check.allowed) return `Error: ${check.reason}`;
+
+      // Symlink policy check
+      const symlinkCheck = this.sandbox.checkSymlink(file_path);
+      if (!symlinkCheck.allowed) return `Error: ${symlinkCheck.reason}`;
     }
 
     let content;
@@ -656,10 +660,24 @@ export class ToolExecutor {
       newContent = content.substring(0, idx) + new_string + content.substring(idx + old_string.length);
     }
 
+    // Sandbox write validation (size, extensions, content scanning)
+    if (this.sandbox?.enabled) {
+      const writeCheck = this.sandbox.checkWrite(file_path, newContent);
+      if (!writeCheck.allowed) return `Error: ${writeCheck.reason}`;
+      if (writeCheck.warnings?.length > 0) {
+        this._writeWarnings = writeCheck.warnings;
+      }
+    }
+
     try {
       await writeFile(file_path, newContent, 'utf-8');
       const replacements = replace_all ? count : 1;
-      return `Successfully replaced ${replacements} occurrence${replacements > 1 ? 's' : ''} in ${file_path}`;
+      let result = `Successfully replaced ${replacements} occurrence${replacements > 1 ? 's' : ''} in ${file_path}`;
+      if (this._writeWarnings?.length > 0) {
+        result += `\n⚠ Warnings:\n${this._writeWarnings.map(w => `  - ${w}`).join('\n')}`;
+        this._writeWarnings = null;
+      }
+      return result;
     } catch (err) {
       if (err.code === 'EACCES') {
         return `Error: Permission denied writing to: ${file_path}`;
@@ -773,7 +791,12 @@ export class ToolExecutor {
       return 'Error: Glob pattern too long (max 500 characters).';
     }
 
-    const searchDir = basePath || this.workspace;
+    const searchDir = path.resolve(basePath || this.workspace);
+
+    // Null byte check
+    if (searchDir.includes('\0')) {
+      return 'Error: Null bytes in path are not allowed.';
+    }
 
     // Sandbox path check (read)
     if (this.sandbox?.enabled) {
@@ -829,7 +852,12 @@ export class ToolExecutor {
       return `Error: Invalid regex pattern "${pattern}": ${err.message}`;
     }
 
-    const targetPath = searchPath || this.workspace;
+    const targetPath = path.resolve(searchPath || this.workspace);
+
+    // Null byte check
+    if (targetPath.includes('\0')) {
+      return 'Error: Null bytes in path are not allowed.';
+    }
 
     // Sandbox path check (read)
     if (this.sandbox?.enabled) {
@@ -1059,6 +1087,10 @@ export class ToolExecutor {
     if (this.sandbox?.enabled) {
       const check = this.sandbox.checkPath(file_path, 'write');
       if (!check.allowed) return `Error: ${check.reason}`;
+
+      // Symlink policy check
+      const symlinkCheck = this.sandbox.checkSymlink(file_path);
+      if (!symlinkCheck.allowed) return `Error: ${symlinkCheck.reason}`;
     }
 
     let content;
@@ -1091,22 +1123,41 @@ export class ToolExecutor {
       return `Patch aborted (no changes written). Errors:\n${errors.join('\n')}`;
     }
 
+    // Sandbox write validation (size, extensions, content scanning)
+    if (this.sandbox?.enabled) {
+      const writeCheck = this.sandbox.checkWrite(file_path, testContent);
+      if (!writeCheck.allowed) return `Error: ${writeCheck.reason}`;
+      if (writeCheck.warnings?.length > 0) {
+        this._writeWarnings = writeCheck.warnings;
+      }
+    }
+
     try {
       await writeFile(file_path, testContent, 'utf-8');
     } catch (err) {
       return `Error writing file: ${err.message}`;
     }
 
-    return `Applied ${edits.length}/${edits.length} edits to ${file_path}`;
+    let result = `Applied ${edits.length}/${edits.length} edits to ${file_path}`;
+    if (this._writeWarnings?.length > 0) {
+      result += `\n⚠ Warnings:\n${this._writeWarnings.map(w => `  - ${w}`).join('\n')}`;
+      this._writeWarnings = null;
+    }
+    return result;
   }
 
   /**
    * List directory contents with tree-like format.
    */
   async _listDir(args) {
-    const dirPath = args.path || this.workspace;
+    const dirPath = path.resolve(args.path || this.workspace);
     const maxDepth = Math.min(args.max_depth || 1, 5);
     const showHidden = args.show_hidden || false;
+
+    // Null byte check
+    if (dirPath.includes('\0')) {
+      return 'Error: Null bytes in path are not allowed.';
+    }
 
     // Sandbox path check (read)
     if (this.sandbox?.enabled) {
@@ -1195,6 +1246,24 @@ export class ToolExecutor {
     // Validate git ref if provided
     if (git_ref && !isValidGitRef(git_ref)) {
       return `Error: Invalid git ref "${git_ref}". Only alphanumeric, /, -, ., _, ~, ^ allowed.`;
+    }
+
+    // Sandbox path checks for file_a and file_b (read access)
+    if (file_a) {
+      const resolvedA = path.resolve(file_a);
+      if (resolvedA.includes('\0')) return 'Error: Null bytes in path are not allowed.';
+      if (this.sandbox?.enabled) {
+        const check = this.sandbox.checkPath(resolvedA, 'read');
+        if (!check.allowed) return `Error: ${check.reason}`;
+      }
+    }
+    if (file_b) {
+      const resolvedB = path.resolve(file_b);
+      if (resolvedB.includes('\0')) return 'Error: Null bytes in path are not allowed.';
+      if (this.sandbox?.enabled) {
+        const check = this.sandbox.checkPath(resolvedB, 'read');
+        if (!check.allowed) return `Error: ${check.reason}`;
+      }
     }
 
     // Case 1: git diff against a ref

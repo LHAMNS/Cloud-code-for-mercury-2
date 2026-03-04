@@ -124,7 +124,7 @@ for (let i = 0; i < args.length; i++) {
 
   if (arg === "--trust-mode") {
     const next = args[i + 1];
-    const validModes = ["readonly", "approval", "acceptEdits", "open", "dontAsk"];
+    const validModes = ["readonly", "approval", "acceptEdits", "open", "dontAsk", "aiSafetyDecide"];
     if (!next || !validModes.includes(next)) {
       console.error(`Error: --trust-mode must be one of: ${validModes.join(", ")}`);
       process.exit(1);

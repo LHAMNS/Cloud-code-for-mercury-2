@@ -18,6 +18,7 @@ import { MemoryManager, ConversationLog } from "./memory.js";
 import { SessionHistory } from "./history.js";
 import { RollbackManager } from "./rollback.js";
 import { Sandbox, SANDBOX_OFF, SANDBOX_ON, SANDBOX_STRICT, SANDBOX_MODES } from "./sandbox.js";
+import { AiSafetyDecider } from "./ai-safety-decide.js";
 import { discoverAgents, formatAgentList, scaffoldAgent } from "./agent-definitions.js";
 import { loadProjectConfig, findProjectConfig, scaffoldProjectConfig } from "./project-config.js";
 import { setProjectConfig } from "./system-prompt.js";
@@ -64,6 +65,7 @@ const TRUST_APPROVAL = "approval";
 const TRUST_ACCEPT_EDITS = "acceptEdits";
 const TRUST_OPEN = "open";
 const TRUST_DONT_ASK = "dontAsk";
+const TRUST_AI_SAFETY_DECIDE = "aiSafetyDecide";
 const TRUST_PLAN = "plan"; // alias for readonly + plan file output
 
 // Read-only tools (allowed in all modes). Fetch is handled separately due to POST restrictions.
@@ -129,6 +131,18 @@ export class MercuryRepl {
       trustMode: this.trustMode,
       sandbox: this.sandbox,
     });
+
+    // AI Safety Decide: instantiate the safety evaluator when in aiSafetyDecide mode
+    this._aiSafetyDecider = null;
+    if (this.trustMode === TRUST_AI_SAFETY_DECIDE) {
+      this._aiSafetyDecider = new AiSafetyDecider({
+        apiKey: options.apiKey,
+        baseURL: options.baseURL,
+        workspace: this.workspace,
+        timeout: 15000,
+        onInfo: this.verbose ? (msg) => console.error(msg) : null,
+      });
+    }
 
     // These will be initialized after workspace is chosen
     this.memory = null;
@@ -379,6 +393,7 @@ export class MercuryRepl {
       case TRUST_APPROVAL: return "Approval (asks before writes/commands)";
       case TRUST_ACCEPT_EDITS: return "Accept Edits (auto-approve file edits, ask for Bash)";
       case TRUST_OPEN: return "Full open (all ops within workspace)";
+      case TRUST_AI_SAFETY_DECIDE: return "AI Safety Decide (AI evaluates each operation's safety)";
       case TRUST_DONT_ASK: return "Don't Ask (deny unless pre-approved)";
       default: return mode;
     }
@@ -784,6 +799,16 @@ export class MercuryRepl {
       return { allowed: false, needsApproval: false, reason: `Read-only mode: ${toolName} blocked` };
     }
 
+    // ── aiSafetyDecide mode: AI evaluates safety instead of asking user ──
+    if (this.trustMode === TRUST_AI_SAFETY_DECIDE) {
+      // Read tools always allowed without AI evaluation
+      if (READ_TOOLS.has(toolName) || toolName === "ContextSearch") {
+        return { allowed: true, needsApproval: false };
+      }
+      // All other tools go through AI safety evaluation
+      return { allowed: true, needsApproval: false, needsAiSafety: true };
+    }
+
     // ── open mode: allow everything within workspace ──
     if (this.trustMode === TRUST_OPEN) {
       // Check workspace boundary for file operations
@@ -1095,7 +1120,34 @@ export class MercuryRepl {
             continue;
           }
 
-          if (perm.needsApproval) {
+          // ── AI Safety Decide: let the AI safety judge evaluate ──
+          if (perm.needsAiSafety && this._aiSafetyDecider) {
+            printToolCall(fnName, args);
+            const userTask = this.conversation.messages?.[0]?.content || "";
+            const safetyResult = await this._aiSafetyDecider.evaluate(
+              fnName, args, userTask, this.conversation.messages || []
+            );
+            if (safetyResult.decision === "DENY") {
+              const errMsg = `AI Safety blocked: ${safetyResult.reason}${safetyResult.suggestion ? ` Suggestion: ${safetyResult.suggestion}` : ""}`;
+              printToolResult(errMsg);
+              this.conversation.addToolResult(tc.id, errMsg);
+              await this.log.append({ role: "tool", name: fnName, result: errMsg });
+              continue;
+            }
+            if (safetyResult.decision === "ESCALATE") {
+              // Escalate to user — fall through to approval prompt
+              const approved = await this._requestApproval(fnName, args,
+                `AI Safety escalated (${(safetyResult.confidence * 100).toFixed(0)}%): ${safetyResult.reason}`);
+              if (!approved) {
+                const errMsg = "User denied this operation.";
+                printToolResult(errMsg);
+                this.conversation.addToolResult(tc.id, errMsg);
+                await this.log.append({ role: "tool", name: fnName, result: errMsg });
+                continue;
+              }
+            }
+            // ALLOW — continue to execution
+          } else if (perm.needsApproval) {
             printToolCall(fnName, args);
             const approved = await this._requestApproval(fnName, args, perm.reason);
             if (!approved) {
@@ -1315,6 +1367,18 @@ export class MercuryRepl {
         else if (mode === "acceptedits" || mode === "3") { this.trustMode = TRUST_ACCEPT_EDITS; this.planMode = false; }
         else if (mode === "open" || mode === "4") { this.trustMode = TRUST_OPEN; this.planMode = false; }
         else if (mode === "dontask" || mode === "5") { this.trustMode = TRUST_DONT_ASK; this.planMode = false; }
+        else if (mode === "aisafetydecide" || mode === "6") {
+          this.trustMode = TRUST_AI_SAFETY_DECIDE; this.planMode = false;
+          if (!this._aiSafetyDecider) {
+            this._aiSafetyDecider = new AiSafetyDecider({
+              apiKey: this.client._apiKey,
+              baseURL: this.client._baseURL,
+              workspace: this.workspace,
+              timeout: 15000,
+              onInfo: this.verbose ? (msg) => console.error(msg) : null,
+            });
+          }
+        }
         else if (mode === "plan") { this.trustMode = TRUST_READONLY; this.planMode = true; printPlanModeBanner(); }
         else if (mode === "outside") {
           this.allowOutsideWorkspace = !this.allowOutsideWorkspace;

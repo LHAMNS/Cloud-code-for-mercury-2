@@ -1,5 +1,57 @@
 # Changelog
 
+## v1.4.0 (2026-03-04)
+
+### Enhanced Sandbox Security
+- **Rate limiting**: Per-minute rate buckets for Bash and Fetch commands with configurable limits per sandbox mode (strict: 30/20 per min, standard: 60/40 per min). `checkRateLimit()` returns retry-after time when exceeded.
+- **Content scanning**: `SECRET_CONTENT_PATTERNS` detects AWS access keys, private keys, JWTs, GitHub tokens, and generic API key patterns in file writes. Enabled via `scanContent` option.
+- **Symlink policy enforcement**: Three policies — `resolve` (default, follows symlinks with ancestor resolution), `block` (rejects all symlinks), `allow` (permits symlinks within workspace). `checkSymlink()` method validates before file operations.
+- **Write validation**: `checkWrite()` enforces maximum file size (`maxWriteSize`), blocks dangerous file extensions (`.exe`, `.dll`, `.so`, `.sh`, `.bat`, `.cmd`, `.ps1`, `.msi`, `.app`, `.dmg`, `.deb`, `.rpm`) in strict mode, and runs content scanning for secrets.
+- **Security event logging**: In-memory ring buffer (last 1000 events) with `_logSecurityEvent()`, `getSecurityEvents()`, `exportSecurityLog()`, and `getSecuritySummary()` for audit trail.
+- **Expanded sensitive paths**: Added `.cargo/credentials`, `.gradle/gradle.properties`, `.m2/settings.xml`, `.gem/credentials`, `.op`, `.config/op`, `.config/Bitwarden CLI` to deny list. Added `/var/spool` and `/root` to system write deny list.
+- **Nonce-based tamper detection**: Constructor generates a random nonce for integrity verification.
+- **Config serialization**: `toSubAgentConfig()` preserves all new security options (symlinkPolicy, scanContent, maxWriteSize, rateLimits).
+
+### Hardened Path & URL Checking
+- **checkPath hardening**: Operation type validation (must be "read" or "write"), realpath resolution via `fs.realpathSync` with `_resolveViaAncestor()` fallback for non-existent paths, strict mode enforces workspace + `/tmp` boundary for BOTH read AND write operations.
+- **checkUrl hardening**: Strict mode with `allowNetwork=false` blocks ALL URLs. Strict mode blocks ALL HTTP including localhost (no exception). Domain allowlist normalization: lowercase + trailing dot stripping to prevent bypass.
+
+### AI Safety Decide Mode
+- **New trust mode** (`aiSafetyDecide`): Independent AI safety judge evaluates all tool calls before execution.
+- **Safety evaluation criteria**: Workspace boundary, command safety, network safety, data protection, proportionality, prompt injection detection, and agent operations (sub-agents, agent teams).
+- **Three-outcome decisions**: ALLOW (auto-execute), DENY (block with suggestions), ESCALATE (prompt user for uncertain cases).
+- **Fail-safe design**: Errors default to ESCALATE. Low-confidence ALLOW auto-escalates to user approval.
+- **Decision caching**: Identical tool calls reuse prior decisions for performance.
+- **Trust level**: 0.5 (between open:0 and acceptEdits:1) — nearly open but with AI-powered safety review.
+- **System prompt integration**: `<permissions mode="aiSafetyDecide">` section explains mode behavior to the model.
+
+### Parallel Tool Execution
+- **Read-only tool parallelization**: Read, Glob, Grep, ListDir, Diff, Lsp, AstSearch, ContextSearch run via `Promise.allSettled()` for concurrent execution.
+- **Write tool sequencing**: Write, Edit, Patch, Bash, Fetch, SubAgent, SubAgentTeam, AgentTeams execute sequentially to preserve ordering guarantees.
+- **Pre-validation phase**: All tool calls validated (hooks, permissions, fetch blocking) before execution begins.
+- **System prompt guidance**: `<parallel-tool-calling>` section instructs the model to maximize parallelism for independent operations.
+
+### Sandbox Integration in Tool Executor
+- **File operations**: `checkSymlink()` and `checkWrite()` (size, extension, content scanning) integrated into `_writeFile`.
+- **Bash commands**: `checkRateLimit('bash')` enforced before command execution.
+- **Fetch requests**: `checkRateLimit('fetch')` enforced for initial requests (not redirect follows).
+
+### XML-Structured System Prompt
+- All system prompt sections wrapped in semantic XML tags: `<identity>`, `<tools>`, `<behavior>`, `<rules>`, `<safety>`, `<workspace-boundary>`, `<operational-safety>`, `<prompt-injection-defense>`, `<context-management>`, `<compression>`, `<context-editing>`, `<memory-and-config>`, `<hooks>`, `<permission-rules>`, `<environment>`, `<sandbox>`, `<permissions>`.
+- Original content fully preserved — XML tags added for improved model comprehension without content changes.
+
+### Test Suite
+- **448 tests** across 116 test suites (+33 new tests), covering:
+  - Hardened checkPath: operation validation, strict boundary enforcement, symlink escape detection, new sensitive paths
+  - Hardened checkUrl: localhost HTTP blocked in strict, allowNetwork=false, case normalization, trailing dot normalization
+  - Sandbox rate limiting: within/exceeding limits, retry-after time, disabled when off
+  - Sandbox write validation: size limits, dangerous extensions, content scanning (AWS keys, private keys)
+  - Sandbox symlink policy: block/allow/resolve policies
+  - Security event logging: event capture, export, summary statistics
+  - Config serialization with new security features
+  - AI Safety Decide mode: 6-mode permission system, trust level ordering
+  - System prompt: XML-structured trust modes (readonly, approval, open, aiSafetyDecide)
+
 ## v1.3.0 (2026-03-03)
 
 ### MCP (Model Context Protocol) Support

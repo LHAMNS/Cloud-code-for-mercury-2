@@ -195,23 +195,25 @@ describe("Skill", () => {
 
 describe("Enhanced Trust Modes", () => {
   // Import the permission modes from permissions.js
-  it("should export all 5 permission modes", async () => {
+  it("should export all 6 permission modes", async () => {
     const {
       MODE_READONLY, MODE_APPROVAL, MODE_ACCEPT_EDITS,
-      MODE_OPEN, MODE_DONT_ASK, VALID_MODES,
+      MODE_AI_SAFETY_DECIDE, MODE_OPEN, MODE_DONT_ASK, VALID_MODES,
     } = await import("../src/permissions.js");
 
     assert.strictEqual(MODE_READONLY, "readonly");
     assert.strictEqual(MODE_APPROVAL, "approval");
     assert.strictEqual(MODE_ACCEPT_EDITS, "acceptEdits");
+    assert.strictEqual(MODE_AI_SAFETY_DECIDE, "aiSafetyDecide");
     assert.strictEqual(MODE_OPEN, "open");
     assert.strictEqual(MODE_DONT_ASK, "dontAsk");
-    assert.strictEqual(VALID_MODES.length, 5);
+    assert.strictEqual(VALID_MODES.length, 6);
   });
 
   it("should have correct TRUST_LEVELS ordering", async () => {
     const { TRUST_LEVELS } = await import("../src/permissions.js");
-    assert.ok(TRUST_LEVELS.open < TRUST_LEVELS.acceptEdits);
+    assert.ok(TRUST_LEVELS.open < TRUST_LEVELS.aiSafetyDecide);
+    assert.ok(TRUST_LEVELS.aiSafetyDecide < TRUST_LEVELS.acceptEdits);
     assert.ok(TRUST_LEVELS.acceptEdits < TRUST_LEVELS.approval);
     assert.ok(TRUST_LEVELS.approval < TRUST_LEVELS.dontAsk);
     assert.ok(TRUST_LEVELS.dontAsk < TRUST_LEVELS.readonly);

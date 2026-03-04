@@ -16,6 +16,7 @@ import {
   MODE_READONLY,
   MODE_APPROVAL,
   MODE_ACCEPT_EDITS,
+  MODE_AI_SAFETY_DECIDE,
   MODE_OPEN,
   MODE_DONT_ASK,
   VALID_MODES,
@@ -34,9 +35,9 @@ const WORKSPACE = process.cwd();
 // 1. Permission Modes
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe("Permission modes (5-mode system)", () => {
-  it("exports all 5 valid modes", () => {
-    assert.equal(VALID_MODES.length, 5);
+describe("Permission modes (6-mode system)", () => {
+  it("exports all 6 valid modes", () => {
+    assert.equal(VALID_MODES.length, 6);
     assert.ok(VALID_MODES.includes(MODE_READONLY));
     assert.ok(VALID_MODES.includes(MODE_APPROVAL));
     assert.ok(VALID_MODES.includes(MODE_ACCEPT_EDITS));
@@ -108,15 +109,16 @@ describe("Permission modes (5-mode system)", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("TRUST_LEVELS ordering", () => {
-  it("has correct ordering: open < acceptEdits < approval < dontAsk < readonly", () => {
-    assert.ok(TRUST_LEVELS[MODE_OPEN] < TRUST_LEVELS[MODE_ACCEPT_EDITS]);
+  it("has correct ordering: open < aiSafetyDecide < acceptEdits < approval < dontAsk < readonly", () => {
+    assert.ok(TRUST_LEVELS[MODE_OPEN] < TRUST_LEVELS[MODE_AI_SAFETY_DECIDE]);
+    assert.ok(TRUST_LEVELS[MODE_AI_SAFETY_DECIDE] < TRUST_LEVELS[MODE_ACCEPT_EDITS]);
     assert.ok(TRUST_LEVELS[MODE_ACCEPT_EDITS] < TRUST_LEVELS[MODE_APPROVAL]);
     assert.ok(TRUST_LEVELS[MODE_APPROVAL] < TRUST_LEVELS[MODE_DONT_ASK]);
     assert.ok(TRUST_LEVELS[MODE_DONT_ASK] < TRUST_LEVELS[MODE_READONLY]);
   });
 
-  it("has exactly 5 entries", () => {
-    assert.equal(Object.keys(TRUST_LEVELS).length, 5);
+  it("has exactly 6 entries", () => {
+    assert.equal(Object.keys(TRUST_LEVELS).length, 6);
   });
 });
 

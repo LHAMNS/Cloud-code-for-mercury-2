@@ -67,19 +67,28 @@ describe("buildSystemPrompt", () => {
   });
 
   describe("trust modes", () => {
-    it("shows Read-Only for readonly mode", () => {
+    it("shows readonly permission mode", () => {
       const prompt = buildSystemPrompt("/tmp/test", "readonly", null);
-      assert.ok(prompt.includes("Read-Only"));
+      assert.ok(prompt.includes('mode="readonly"'));
+      assert.ok(prompt.includes("only read files"));
     });
 
-    it("shows Approval Mode for approval mode", () => {
+    it("shows approval permission mode", () => {
       const prompt = buildSystemPrompt("/tmp/test", "approval", null);
-      assert.ok(prompt.includes("Approval"));
+      assert.ok(prompt.includes('mode="approval"'));
+      assert.ok(prompt.includes("require explicit user approval"));
     });
 
-    it("shows Full Open for open mode", () => {
+    it("shows open permission mode", () => {
       const prompt = buildSystemPrompt("/tmp/test", "open", null);
-      assert.ok(prompt.includes("Full Open"));
+      assert.ok(prompt.includes('mode="open"'));
+      assert.ok(prompt.includes("All operations are allowed"));
+    });
+
+    it("shows aiSafetyDecide permission mode", () => {
+      const prompt = buildSystemPrompt("/tmp/test", "aiSafetyDecide", null);
+      assert.ok(prompt.includes('mode="aiSafetyDecide"'));
+      assert.ok(prompt.includes("AI Safety Decide"));
     });
   });
 

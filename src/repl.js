@@ -121,7 +121,6 @@ export class MercuryRepl {
       sandboxSubAgents: options.sandboxSubAgents !== false,
       allowNetwork: options.sandboxAllowNetwork !== false,
     });
-    this.sandbox.init();
 
     // ToolExecutor receives workspace + trustMode + sandbox for enforcement
     this.toolExecutor = new ToolExecutor({
@@ -192,8 +191,11 @@ export class MercuryRepl {
       },
     });
 
-    // Interactive setup flow: workspace + trust mode
+    // Interactive setup flow: workspace + trust mode + sandbox
     await this._startupFlow();
+
+    // Freeze sandbox properties now that setup is complete
+    this.sandbox.init();
 
     // Init workspace-dependent components
     this.memory = new MemoryManager(this.workspace);

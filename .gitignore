@@ -1,0 +1,11 @@
+node_modules/
+.env
+*.log
+.DS_Store
+.mercury/
+dist/
+_pkg_entry.cjs
+*.tgz
+.codex-backup-*
+test-output/
+*.tmp-*

@@ -1,0 +1,59 @@
+{
+  "name": "mercury-code",
+  "version": "1.4.1",
+  "description": "Interactive AI coding assistant powered by Mercury-2 diffusion model from Inception Labs. Like Claude Code, but for Mercury-2.",
+  "main": "src/index.js",
+  "type": "module",
+  "bin": {
+    "mercury": "./cli.js",
+    "mercury-code": "./cli.js"
+  },
+  "scripts": {
+    "start": "node cli.js",
+    "start:web": "node cli.js --web",
+    "dev": "node cli.js --verbose",
+    "test": "node --test test/*.test.js",
+    "postinstall": "node scripts/postinstall.js",
+    "build": "node scripts/build-binaries.js",
+    "build:win": "node scripts/build-binaries.js --windows",
+    "build:mac": "node scripts/build-binaries.js --macos",
+    "build:linux": "node scripts/build-binaries.js --linux",
+    "prepublishOnly": "node --test test/*.test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LHAMNS/Cloud-code-for-mercury-2.git"
+  },
+  "homepage": "https://github.com/LHAMNS/Cloud-code-for-mercury-2#readme",
+  "bugs": {
+    "url": "https://github.com/LHAMNS/Cloud-code-for-mercury-2/issues"
+  },
+  "keywords": [
+    "mercury",
+    "mercury-2",
+    "mercury-code",
+    "diffusion-model",
+    "coding-assistant",
+    "cli",
+    "ai",
+    "inception-labs",
+    "mcp",
+    "agent",
+    "coding"
+  ],
+  "engines": {
+    "node": ">=18.17.0"
+  },
+  "license": "MIT",
+  "files": [
+    "cli.js",
+    "src/",
+    "scripts/postinstall.js",
+    "install.sh",
+    "install.ps1",
+    "LICENSE.md",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "dependencies": {}
+}

@@ -1,0 +1,295 @@
+# Mercury Code - Automated Release Pipeline
+# Triggers on version tags (v*) and builds binaries for all platforms.
+#
+# What it does:
+#   1. Runs the full test suite
+#   2. Publishes to npm (npm install -g mercury-code)
+#   3. Builds standalone binaries (no Node.js required) for:
+#      - Windows x64 + ARM64 (.exe + .zip)
+#      - macOS x64 (Intel) + ARM64 (Apple Silicon) (.tar.gz)
+#      - Linux x64 + ARM64 (.tar.gz)
+#   4. Builds Windows installer EXE (Inno Setup)
+#   5. Creates a GitHub Release with all artifacts + checksums
+#
+# To trigger a release:
+#   git tag v1.4.0
+#   git push origin v1.4.0
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (skip publish)'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: write
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  # ── Job 1: Test ─────────────────────────────────────────────────────────────
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: npm test
+        env:
+          INCEPTION_API_KEY: test-key-for-ci
+
+  # ── Job 2: Publish to npm ───────────────────────────────────────────────────
+  npm-publish:
+    name: Publish to npm
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event.inputs.dry_run != 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: 'https://registry.npmjs.org'
+      - run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # ── Job 3: Build binaries (matrix) ─────────────────────────────────────────
+  build-binaries:
+    name: Build ${{ matrix.target }}
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: win-x64
+            os: windows-latest
+            pkg_target: node18-win-x64
+            ext: .exe
+            archive: zip
+          - target: win-arm64
+            os: windows-latest
+            pkg_target: node18-win-arm64
+            ext: .exe
+            archive: zip
+          - target: macos-x64
+            os: macos-13
+            pkg_target: node18-macos-x64
+            ext: ''
+            archive: tar.gz
+          - target: macos-arm64
+            os: macos-14
+            pkg_target: node18-macos-arm64
+            ext: ''
+            archive: tar.gz
+          - target: linux-x64
+            os: ubuntu-latest
+            pkg_target: node18-linux-x64
+            ext: ''
+            archive: tar.gz
+          - target: linux-arm64
+            os: ubuntu-latest
+            pkg_target: node18-linux-arm64
+            ext: ''
+            archive: tar.gz
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Get version
+        id: version
+        shell: bash
+        run: echo "version=$(node -e 'console.log(require("./package.json").version)')" >> $GITHUB_OUTPUT
+
+      - name: Create CJS entry for pkg
+        shell: bash
+        run: |
+          cat > _pkg_entry.cjs << 'ENTRY'
+#!/usr/bin/env node
+'use strict';
+async function main() {
+  try { await import('./cli.js'); }
+  catch (err) { console.error('Startup error:', err.message); process.exit(1); }
+}
+main();
+ENTRY
+
+      - name: Inject pkg asset config
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const pkgPath = 'package.json';
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+          pkg.pkg = {
+            scripts: [
+              'cli.js',
+              'src/**/*.js'
+            ],
+            assets: [
+              'package.json',
+              'src/**/*.js',
+              'src/tools/**/*.js',
+              'src/ui/**/*.js',
+              'src/web-ui/**'
+            ],
+            outputPath: 'dist'
+          };
+          fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
+          NODE
+
+      - name: Build binary
+        shell: bash
+        run: |
+          npx --yes @yao-pkg/pkg _pkg_entry.cjs \
+            --target ${{ matrix.pkg_target }} \
+            --output dist/mercury-code-v${{ steps.version.outputs.version }}-${{ matrix.target }}${{ matrix.ext }} \
+            --compress GZip \
+            --config package.json
+
+      - name: Create archive (Unix)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          cd dist
+          BINARY="mercury-code-v${{ steps.version.outputs.version }}-${{ matrix.target }}"
+          chmod +x "$BINARY"
+          tar czf "${BINARY}.tar.gz" "$BINARY"
+
+      - name: Create archive (Windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          cd dist
+          $binary = "mercury-code-v${{ steps.version.outputs.version }}-${{ matrix.target }}.exe"
+          Compress-Archive -Path $binary -DestinationPath ($binary -replace '\.exe$', '.zip')
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.exe
+
+  # ── Job 4: Windows Installer ────────────────────────────────────────────────
+  windows-installer:
+    name: Windows Installer (EXE)
+    needs: build-binaries
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        shell: bash
+        run: echo "version=$(node -e 'console.log(require("./package.json").version)')" >> $GITHUB_OUTPUT
+
+      - name: Download Windows x64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-win-x64
+          path: dist/
+
+      - name: Extract binary for installer
+        shell: bash
+        run: |
+          cd dist
+          # The exe should already be here from the artifact
+          ls -la
+
+      - name: Build installer with Inno Setup
+        shell: cmd
+        run: |
+          "C:\Program Files (x86)\Inno Setup 6\iscc.exe" /DMyAppVersion=${{ steps.version.outputs.version }} scripts\windows-installer.iss
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/mercury-code-v*-windows-setup.exe
+
+  # ── Job 5: Create GitHub Release ────────────────────────────────────────────
+  release:
+    name: Create Release
+    needs: [build-binaries, windows-installer, npm-publish]
+    if: always() && needs.build-binaries.result == 'success' && needs.npm-publish.result == 'success' && needs.windows-installer.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        shell: bash
+        run: echo "version=$(node -e 'console.log(require("./package.json").version)')" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Collect release files
+        run: |
+          mkdir -p release
+          find artifacts/ -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.exe" \) -exec cp {} release/ \;
+          ls -la release/
+
+      - name: Generate checksums
+        run: |
+          cd release
+          sha256sum * > mercury-code-v${{ steps.version.outputs.version }}-SHA256SUMS.txt
+          cat mercury-code-v${{ steps.version.outputs.version }}-SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Mercury Code v${{ steps.version.outputs.version }}
+          body: |
+            ## Mercury Code v${{ steps.version.outputs.version }}
+
+            ### Installation
+
+            **npm (recommended, all platforms):**
+            ```bash
+            npm install -g mercury-code
+            ```
+
+            **Windows Installer:**
+            Download `mercury-code-v${{ steps.version.outputs.version }}-windows-setup.exe` below.
+
+            **Standalone Binaries (no Node.js required):**
+            | Platform | Architecture | Download |
+            |----------|-------------|----------|
+            | Windows | x64 | `mercury-code-v${{ steps.version.outputs.version }}-win-x64.zip` |
+            | Windows | ARM64 | `mercury-code-v${{ steps.version.outputs.version }}-win-arm64.zip` |
+            | macOS | Intel (x64) | `mercury-code-v${{ steps.version.outputs.version }}-macos-x64.tar.gz` |
+            | macOS | Apple Silicon (ARM64) | `mercury-code-v${{ steps.version.outputs.version }}-macos-arm64.tar.gz` |
+            | Linux | x64 | `mercury-code-v${{ steps.version.outputs.version }}-linux-x64.tar.gz` |
+            | Linux | ARM64 | `mercury-code-v${{ steps.version.outputs.version }}-linux-arm64.tar.gz` |
+
+            **Quick Start:**
+            ```bash
+            export INCEPTION_API_KEY=your_key_here
+            mercury
+            ```
+
+            See [CHANGELOG.md](CHANGELOG.md) for details.
+          files: release/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true

@@ -69,10 +69,10 @@ describe("AgentTeam", () => {
       assert.equal(secondClaim, false);
     });
 
-    it("completeTask sets result and timestamp", () => {
+    it("completeTask sets result and timestamp", async () => {
       const t1 = team.addTask({ title: "Task 1", detail: "" });
       team.claimTask(t1.id, "mate-1");
-      team.completeTask(t1.id, "Result here");
+      await team.completeTask(t1.id, "Result here");
 
       const task = team.tasks.get(t1.id);
       assert.equal(task.status, "completed");
@@ -80,14 +80,14 @@ describe("AgentTeam", () => {
       assert.ok(task.completedAt);
     });
 
-    it("getTaskSummary categorizes tasks correctly", () => {
+    it("getTaskSummary categorizes tasks correctly", async () => {
       team.addTask({ title: "T1", detail: "" });
       const t2 = team.addTask({ title: "T2", detail: "" });
       const t3 = team.addTask({ title: "T3", detail: "" });
 
       team.claimTask(t2.id, "mate-1");
       team.claimTask(t3.id, "mate-2");
-      team.completeTask(t3.id, "done");
+      await team.completeTask(t3.id, "done");
 
       const summary = team.getTaskSummary();
       assert.equal(summary.pending.length, 1);

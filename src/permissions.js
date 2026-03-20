@@ -189,7 +189,7 @@ export class PermissionManager {
       if (settings.defaultMode && VALID_MODES.includes(settings.defaultMode)) {
         const newLevel = TRUST_LEVELS[settings.defaultMode] ?? 2;
         const currentLevel = TRUST_LEVELS[this.trustMode] ?? 2;
-        if (newLevel >= currentLevel) {
+        if (newLevel > currentLevel) {
           this.trustMode = settings.defaultMode;
         }
       }

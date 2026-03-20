@@ -188,13 +188,12 @@ export class LspClient {
         } catch (err) {
           debugLog("LspClient.stop.exit", err);
         }
+        // Null the instance reference only after the exit notification has been sent
+        this._process = null;
       });
     } catch (err) {
       debugLog("LspClient.stop.send", err);
     }
-
-    // Null the reference AFTER sending shutdown message
-    this._process = null;
 
     // Set a force-kill timeout and unref it so it doesn't block process exit
     const killTimer = setTimeout(() => {

@@ -204,7 +204,10 @@ export class MercuryClient {
               let errBody = "";
               const MAX_ERR_BODY = 1024 * 1024; // 1MB
               res.on("data", (d) => {
-                if (errBody.length < MAX_ERR_BODY) errBody += d.toString();
+                if (errBody.length < MAX_ERR_BODY) {
+                  const chunk = d.toString();
+                  errBody += chunk.slice(0, MAX_ERR_BODY - errBody.length);
+                }
               });
               res.on("end", () => {
                 connectionError = new Error(`Mercury API error (${res.statusCode}): ${errBody}`);
@@ -216,7 +219,10 @@ export class MercuryClient {
             let errBody = "";
             const MAX_ERR_BODY2 = 1024 * 1024; // 1MB
             res.on("data", (d) => {
-              if (errBody.length < MAX_ERR_BODY2) errBody += d.toString();
+              if (errBody.length < MAX_ERR_BODY2) {
+                const chunk = d.toString();
+                errBody += chunk.slice(0, MAX_ERR_BODY2 - errBody.length);
+              }
             });
             res.on("end", () =>
               finish(new Error(`Mercury API error (${res.statusCode}): ${errBody}`))
@@ -342,6 +348,7 @@ export class MercuryClient {
         }
       } finally {
         // Ensure the request is destroyed if the consumer stops early
+        clearTimeout(inactivityTimer);
         req.destroy();
       }
     }

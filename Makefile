@@ -81,9 +81,7 @@ test: check-node
 lint:
 	@echo "Checking for syntax errors..."
 	@node --check cli.js
-	@find src -name '*.js' -print0 | while IFS= read -r -d '' f; do \
-		node --check "$$f" 2>/dev/null || echo "Syntax error in $$f"; \
-	done
+	@find src -name '*.js' -exec sh -c 'node --check "$$1" 2>/dev/null || echo "Syntax error in $$1"' _ {} \;
 	@echo "Syntax check passed."
 
 # ── Release targets ───────────────────────────────────────────────────────────

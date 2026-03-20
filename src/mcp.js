@@ -92,6 +92,16 @@ class McpServer {
       }
     }
 
+    // Validate the command is a simple executable name — spaces or shell
+    // metacharacters would be misinterpreted by child_process.spawn() which
+    // does NOT use a shell by default.
+    if (!this.command || typeof this.command !== "string") {
+      throw new Error(`MCP server ${this.name}: command must be a non-empty string`);
+    }
+    if (/[\s|;&$`"'\\()<>]/.test(this.command)) {
+      throw new Error(`MCP server ${this.name}: command must be a simple executable name without spaces or shell metacharacters: ${this.command}`);
+    }
+
     this._process = spawn(this.command, this.args, {
       stdio: ["pipe", "pipe", "pipe"],
       env,
@@ -254,45 +264,50 @@ class McpServer {
   }
 
   async _callToolHttp(toolName, args) {
-    await this._validateHttpUrl();
-    const response = await fetch(`${this.url}/tools/call`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: ++this._requestId,
-        method: "tools/call",
-        params: { name: toolName, arguments: args },
-      }),
-      signal: AbortSignal.timeout(30000),
-    });
-    const contentLength = parseInt(response.headers.get("content-length") || "0", 10);
-    if (contentLength > MAX_MCP_RESPONSE_SIZE) {
-      throw new Error(`MCP HTTP response too large: ${contentLength} bytes (max ${MAX_MCP_RESPONSE_SIZE})`);
-    }
-    
-    // Always use streaming to prevent OOM from unbounded response bodies.
-    let body = "";
-    if (response.body) {
-      for await (const chunk of response.body) {
-        body += chunk.toString();
-        if (body.length > MAX_MCP_RESPONSE_SIZE) {
-          throw new Error(`MCP HTTP response exceeded maximum size of ${MAX_MCP_RESPONSE_SIZE} bytes while streaming`);
-        }
+    try {
+      await this._validateHttpUrl();
+      const response = await fetch(`${this.url}/tools/call`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: ++this._requestId,
+          method: "tools/call",
+          params: { name: toolName, arguments: args },
+        }),
+        signal: AbortSignal.timeout(30000),
+      });
+      const contentLength = parseInt(response.headers.get("content-length") || "0", 10);
+      if (contentLength > MAX_MCP_RESPONSE_SIZE) {
+        throw new Error(`MCP HTTP response too large: ${contentLength} bytes (max ${MAX_MCP_RESPONSE_SIZE})`);
       }
-    } else {
-      throw new Error("MCP HTTP: streaming body not available; cannot enforce response size limit safely");
+
+      // Always use streaming to prevent OOM from unbounded response bodies.
+      let body = "";
+      if (response.body) {
+        for await (const chunk of response.body) {
+          body += chunk.toString();
+          if (body.length > MAX_MCP_RESPONSE_SIZE) {
+            throw new Error(`MCP HTTP response exceeded maximum size of ${MAX_MCP_RESPONSE_SIZE} bytes while streaming`);
+          }
+        }
+      } else {
+        throw new Error("MCP HTTP: streaming body not available; cannot enforce response size limit safely");
+      }
+      const data = JSON.parse(body);
+      if (data.result?.content) {
+        return data.result.content
+          .map((c) => (c.type === "text" ? c.text : JSON.stringify(c)))
+          .join("\n");
+      }
+      if (data.error) {
+        throw new Error(`MCP error: ${data.error.message}`);
+      }
+      return JSON.stringify(data.result);
+    } catch (err) {
+      debugLog("McpServer._callToolHttp", err);
+      throw new Error(`MCP HTTP tool call failed for "${toolName}": ${err.message}`);
     }
-    const data = JSON.parse(body);
-    if (data.result?.content) {
-      return data.result.content
-        .map((c) => (c.type === "text" ? c.text : JSON.stringify(c)))
-        .join("\n");
-    }
-    if (data.error) {
-      throw new Error(`MCP error: ${data.error.message}`);
-    }
-    return JSON.stringify(data.result);
   }
 
   /**

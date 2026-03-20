@@ -43,12 +43,12 @@ describe("AgentTeam", () => {
       assert.equal(next.title, "Task 1"); // Task 2 blocked
     });
 
-    it("dependent task becomes available after dependency completes", () => {
+    it("dependent task becomes available after dependency completes", async () => {
       const t1 = team.addTask({ title: "Task 1", detail: "" });
       const t2 = team.addTask({ title: "Task 2", detail: "", depends: [t1.id] });
 
       team.claimTask(t1.id, "mate-1");
-      team.completeTask(t1.id, "done");
+      await team.completeTask(t1.id, "done");
 
       const next = team.getNextTask();
       assert.equal(next.id, t2.id);

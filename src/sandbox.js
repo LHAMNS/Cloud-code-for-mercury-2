@@ -828,6 +828,13 @@ export class Sandbox {
     // Domain allowlist (strict mode only, when configured)
     if (this.mode === SANDBOX_STRICT && this.allowedDomains.length > 0) {
       // Normalize domain: lowercase, strip trailing dot
+      if (!parsed.hostname) {
+        this._logSecurityEvent("domain_blocked", "null hostname");
+        return {
+          allowed: false,
+          reason: "Sandbox strict: malformed URL (no hostname)",
+        };
+      }
       const domain = parsed.hostname.toLowerCase().replace(/\.$/, "");
       const normalizedAllowlist = this.allowedDomains
         .map(d => d.toLowerCase().replace(/\.$/, ""))
@@ -946,7 +953,7 @@ export class Sandbox {
     }
 
     if (bucket.length >= limit) {
-      const retryAfterMs = Math.max(0, bucket[0] + windowMs - now);
+      const retryAfterMs = bucket.length > 0 ? Math.max(0, bucket[0] + windowMs - now) : windowMs;
       this._logSecurityEvent("rate_limited", `${opType}: ${bucket.length}/${limit} per minute`);
       return {
         allowed: false,

@@ -322,7 +322,7 @@ Evaluate whether this tool call is safe, reasonable, and compliant. Respond with
       const parsed = JSON.parse(jsonStr);
 
       // Reject decisions with missing or suspiciously short reason (likely injected JSON)
-      if (!parsed || !parsed.reason || parsed.reason.length < 10) {
+      if (!parsed || !parsed.reason || typeof parsed.reason !== 'string' || parsed.reason.length < 10) {
         return {
           decision: "ESCALATE",
           confidence: 0,

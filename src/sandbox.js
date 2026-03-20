@@ -554,7 +554,7 @@ export class Sandbox {
     // The command
     const ulimits = this._getUlimits();
     const innerCmd = ulimits ? `${ulimits} && ${command}` : command;
-    parts.push("--", "sh", "-c", this._shellEscape(innerCmd));
+    parts.push("--", "sh", "-c", innerCmd);
 
     return parts.join(" ");
   }

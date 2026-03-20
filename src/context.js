@@ -155,7 +155,7 @@ export function getContextStats(messages, systemPrompt, state = null, maxContext
     effective: effectiveInput,
     pct: estimated / effectiveInput,
     compactionCount: activeState.compactionCount,
-    apiReported: activeState.lastApiUsage?.prompt_tokens || null,
+    apiReported: activeState.lastApiUsage?.prompt_tokens ?? null,
   };
 }
 

@@ -449,8 +449,14 @@ export class AgentTeam {
                 result.includes('initialization failed')
               );
               if (isErrorResult) {
-                // Requeue the task so another teammate can attempt it
-                this._requeueTask(task.id, result);
+                // Requeue the task so another teammate can attempt it, with a retry limit
+                task.requeueCount = (task.requeueCount || 0) + 1;
+                if (task.requeueCount >= 3) {
+                  // Permanent failure after 3 retries — don't loop forever
+                  await this.completeTask(task.id, `Error: task failed after ${task.requeueCount} attempts. Last error: ${result}`);
+                } else {
+                  this._requeueTask(task.id, result);
+                }
                 results.set(task.id, result);
               } else {
                 await this.completeTask(task.id, result);
@@ -678,6 +684,11 @@ export async function executeAgentTeams(args, executorOptions = {}) {
 
   if (!action) {
     return 'Error: action is required. Options: create, add_task, spawn_teammate, message, broadcast, run, status, shutdown';
+  }
+
+  // Sanitize team_name at the lookup layer to match the sanitization done in the constructor
+  if (args.team_name) {
+    args.team_name = args.team_name.replace(/[^a-zA-Z0-9_-]/g, '_');
   }
 
   switch (action) {

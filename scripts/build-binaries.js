@@ -10,7 +10,7 @@
 //   node scripts/build-binaries.js --linux      Build only Linux
 
 import { execFileSync, execSync } from "node:child_process";
-import { existsSync, mkdirSync, copyFileSync, readFileSync, writeFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, copyFileSync, readFileSync, writeFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { platform } from "node:os";
@@ -142,15 +142,16 @@ function buildTargets(selectedTargets) {
         ok(`Built: ${outName}`);
       } catch (e) {
         err(`Failed to build ${name}: ${e.message}`);
+        // Clean up partial binary file from failed build
+        try { if (existsSync(outPath)) rmSync(outPath); } catch {}
       }
     }
   } finally {
     // Always restore package.json, even if the build crashes
     writeFileSync(join(ROOT, "package.json"), originalPkg, "utf-8");
+    // Always clean up the temporary CJS entry point
+    try { if (existsSync(entry)) rmSync(entry); } catch {}
   }
-
-  // Clean up entry point
-  try { rmSync(entry); } catch {}
 }
 
 // ── Step 4: Create platform-specific archives ────────────────────────────────
@@ -159,9 +160,17 @@ function createArchives() {
   log("Creating platform archives...");
   const files = readdirSync(DIST);
 
+  const MIN_BINARY_SIZE = 5 * 1024 * 1024; // 5 MB
+
   for (const file of files) {
     if (file.startsWith("mercury-code-v") && !file.endsWith(".zip") && !file.endsWith(".tar.gz")) {
       const filePath = join(DIST, file);
+
+      // Validate binary file size before archiving
+      const fileSize = statSync(filePath).size;
+      if (fileSize < MIN_BINARY_SIZE) {
+        err(`WARNING: ${file} is only ${(fileSize / 1024 / 1024).toFixed(2)} MB (expected >= 5 MB). Binary may be corrupt or incomplete.`);
+      }
 
       if (file.endsWith(".exe")) {
         // Windows: create .zip

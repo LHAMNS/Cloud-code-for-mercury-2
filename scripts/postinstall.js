@@ -17,8 +17,9 @@ const cpu = arch();       // 'x64', 'arm64', 'arm'
 if (os !== "win32") {
   try {
     chmodSync(join(ROOT, "cli.js"), 0o755);
-  } catch {
+  } catch (err) {
     // Not critical — npm handles this via bin links
+    console.error(`  [warn] Failed to chmod cli.js: ${err.message}`);
   }
 }
 
@@ -29,8 +30,9 @@ if (home) {
   if (!existsSync(configDir)) {
     try {
       mkdirSync(configDir, { recursive: true });
-    } catch {
-      // Not critical
+    } catch (err) {
+      // Not critical, but warn the user
+      console.error(`  [warn] Failed to create config directory ${configDir}: ${err.message}`);
     }
   }
 }

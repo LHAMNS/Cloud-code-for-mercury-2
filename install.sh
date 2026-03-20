@@ -55,6 +55,10 @@ check_node() {
     # 解析主版本号和次版本号
     local major minor patch
     IFS='.' read -r major minor patch <<< "${node_version}"
+    # Strip non-numeric suffixes (e.g., "0-rc1" -> "0")
+    major="${major%%[!0-9]*}"
+    minor="${minor%%[!0-9]*}"
+    patch="${patch%%[!0-9]*}"
 
     # 要求 >= 18.17.0
     local required_major=18

@@ -24,7 +24,7 @@ export function normalizeIp(ip) {
     if (expanded.startsWith('0000:0000:0000:0000:0000:ffff:')) {
       const hex = expanded.slice(30); // last 2 groups
       const parts = hex.split(':');
-      if (parts.length === 2) {
+      if (parts.length === 2 && parts[0].length === 4 && parts[1].length === 4) {
         const a = parseInt(parts[0].slice(0, 2), 16);
         const b = parseInt(parts[0].slice(2), 16);
         const c = parseInt(parts[1].slice(0, 2), 16);

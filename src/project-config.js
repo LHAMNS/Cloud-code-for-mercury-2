@@ -256,7 +256,10 @@ async function _safeRead(filePath, maxBytes) {
     let trimmed = content.trim();
     if (!trimmed) return null;
     if (maxBytes && Buffer.byteLength(trimmed, 'utf-8') > maxBytes) {
-      trimmed = trimmed.slice(0, maxBytes);
+      // Truncate at byte boundary, not character boundary, for accurate size limits
+      trimmed = Buffer.from(trimmed, 'utf-8').subarray(0, maxBytes).toString('utf-8');
+      // Remove possibly truncated multi-byte character at the end
+      trimmed = trimmed.replace(/[\uFFFD]$/, '');
       return trimmed + "\n... (truncated)";
     }
     return trimmed;

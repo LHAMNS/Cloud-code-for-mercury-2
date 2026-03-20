@@ -257,7 +257,7 @@ export class TaintTracker {
     const windowSize = Math.min(MAX_FRAGMENT_LENGTH, text.length);
     const stride = Math.max(FRAGMENT_SAMPLE_STRIDE, Math.floor(text.length / MAX_FINGERPRINTS_PER_REG));
 
-    for (let i = 0; i < text.length - MIN_FRAGMENT_LENGTH && fingerprints.length < MAX_FINGERPRINTS_PER_REG; i += stride) {
+    for (let i = 0; i <= text.length - MIN_FRAGMENT_LENGTH && fingerprints.length < MAX_FINGERPRINTS_PER_REG; i += stride) {
       const window = text.slice(i, i + windowSize);
       if (window.length >= MIN_FRAGMENT_LENGTH) {
         // Normalize whitespace before hashing to improve matching across formatting changes

@@ -156,31 +156,36 @@ export class AgentTeam {
       createdAt: Date.now(),
       completedAt: null,
     };
-    // Check for circular dependencies
+    // Check for circular dependencies without temporarily adding the task
+    // to the map (avoids race condition where task remains in incomplete state).
     if (taskDef.depends && taskDef.depends.length > 0) {
-      // Temporarily add the new task to the map so cycle detection can
-      // traverse through it (otherwise the check is dead code for new tasks).
-      this.tasks.set(task.id, task);
-      try {
-        const visited = new Set();
-        const checkCycle = (id) => {
-          if (id === task.id) return true; // Cycle detected
-          if (visited.has(id)) return false;
-          visited.add(id);
-          const depTask = this.tasks.get(id);
-          if (!depTask || !depTask.depends) return false;
-          return depTask.depends.some(d => checkCycle(d));
-        };
-        for (const depId of taskDef.depends) {
-          if (depId === task.id || checkCycle(depId)) {
-            this.tasks.delete(task.id);
-            throw new Error(`Circular dependency detected: task "${task.id}" and "${depId}"`);
-          }
+      // Self-dependency check
+      for (const depId of taskDef.depends) {
+        if (depId === task.id) {
+          throw new Error(`Circular dependency detected: task "${task.id}" and "${depId}"`);
         }
-      } catch (err) {
-        // Ensure the temporary entry is removed if cycle found
-        this.tasks.delete(task.id);
-        throw err;
+      }
+      // Transitive cycle check: walk each dependency's transitive deps and
+      // also treat the new task's own depends as edges (since it isn't in the
+      // map yet, we must handle it explicitly).
+      const checkCycle = (id, visited) => {
+        if (id === task.id) return true; // Cycle back to the new task
+        if (visited.has(id)) return false;
+        visited.add(id);
+        const depTask = this.tasks.get(id);
+        if (!depTask || !depTask.depends) return false;
+        return depTask.depends.some(d => checkCycle(d, visited));
+      };
+      for (const depId of taskDef.depends) {
+        const visited = new Set();
+        // Walk existing graph from depId; if any transitive dep has a
+        // dependency that lists one of the new task's own deps we still
+        // catch it, and if depId transitively reaches task.id we catch
+        // that too (though task.id isn't in the map, checkCycle handles it
+        // via the id === task.id guard).
+        if (checkCycle(depId, visited)) {
+          throw new Error(`Circular dependency detected: task "${task.id}" and "${depId}"`);
+        }
       }
     }
     this.tasks.set(task.id, task);
@@ -444,8 +449,14 @@ export class AgentTeam {
                 result.includes('initialization failed')
               );
               if (isErrorResult) {
-                // Requeue the task so another teammate can attempt it
-                this._requeueTask(task.id, result);
+                // Requeue the task so another teammate can attempt it, with a retry limit
+                task.requeueCount = (task.requeueCount || 0) + 1;
+                if (task.requeueCount >= 3) {
+                  // Permanent failure after 3 retries — don't loop forever
+                  await this.completeTask(task.id, `Error: task failed after ${task.requeueCount} attempts. Last error: ${result}`);
+                } else {
+                  this._requeueTask(task.id, result);
+                }
                 results.set(task.id, result);
               } else {
                 await this.completeTask(task.id, result);
@@ -618,7 +629,11 @@ export class AgentTeam {
       await rename(tmpPath, finalPath);
     };
     this._persistQueue = this._persistQueue.then(task, task).catch((err) => {
-      debugLog("AgentTeam._persist", err);
+      try {
+        debugLog("AgentTeam._persist", err);
+      } catch (_ignored) {
+        // Prevent debugLog failures from leaving the queue in a rejected state
+      }
     });
     return this._persistQueue;
   }
@@ -669,6 +684,11 @@ export async function executeAgentTeams(args, executorOptions = {}) {
 
   if (!action) {
     return 'Error: action is required. Options: create, add_task, spawn_teammate, message, broadcast, run, status, shutdown';
+  }
+
+  // Sanitize team_name at the lookup layer to match the sanitization done in the constructor
+  if (args.team_name) {
+    args.team_name = args.team_name.replace(/[^a-zA-Z0-9_-]/g, '_');
   }
 
   switch (action) {

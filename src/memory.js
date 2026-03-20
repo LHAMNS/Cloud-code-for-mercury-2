@@ -103,8 +103,8 @@ export class MemoryManager {
   }
 
   _enqueueWrite(task) {
-    const run = this._writeQueue.then(task, task);
-    this._writeQueue = run.catch(() => {});
+    const run = this._writeQueue.then(() => task());
+    this._writeQueue = run.catch((err) => { debugLog("MemoryManager._enqueueWrite", err); });
     return run;
   }
 }
@@ -160,8 +160,8 @@ export class ConversationLog {
   }
 
   _enqueueWrite(task) {
-    const run = this._writeQueue.then(task, task);
-    this._writeQueue = run.catch(() => {});
+    const run = this._writeQueue.then(() => task());
+    this._writeQueue = run.catch((err) => { debugLog("ConversationLog._enqueueWrite", err); });
     return run;
   }
 }

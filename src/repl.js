@@ -1090,7 +1090,7 @@ export class MercuryRepl {
         if (this.sandbox) {
           const pathCheck = this.sandbox.checkPath(resolvedAbs, 'read');
           if (!pathCheck.allowed) {
-            expanded = expanded.replace(m.raw, `[File access denied: ${relPath} — outside workspace or blocked by sandbox]`);
+            expanded = expanded.replaceAll(m.raw, `[File access denied: ${relPath} — outside workspace or blocked by sandbox]`);
             continue;
           }
         }
@@ -1099,7 +1099,7 @@ export class MercuryRepl {
         if (this.workspace) {
           const realWorkspace = path.resolve(this.workspace);
           if (!resolvedAbs.startsWith(realWorkspace + path.sep) && resolvedAbs !== realWorkspace) {
-            expanded = expanded.replace(m.raw, `[File access denied: ${relPath} — outside workspace]`);
+            expanded = expanded.replaceAll(m.raw, `[File access denied: ${relPath} — outside workspace]`);
             continue;
           }
         }
@@ -2898,7 +2898,7 @@ export class MercuryRepl {
     printInfo("Compacting conversation...");
     const before = this.conversation.messages.length;
     try {
-      await this.conversation.compressIfNeeded(this.client, this.memory, 0.5);
+      await this.conversation.compress(this.client, this.memory, (msg) => printInfo(msg));
       const after = this.conversation.messages.length;
       printSuccess(`Compacted: ${before} messages → ${after} messages`);
     } catch (err) {
@@ -3198,7 +3198,7 @@ export class MercuryRepl {
     // Undo the last checkpoint (context rollback — revert messages only, not files)
     const last = this.rollback.count - 1;
     const result = this.rollback.contextRollback(last, this.conversation.messages);
-    if (result) {
+    if (result?.restored) {
       this.conversation.messages = result.messages;
       printSuccess(`Undo: Reverted to checkpoint ${last + 1} (${result.label || "previous state"}).`);
     } else {

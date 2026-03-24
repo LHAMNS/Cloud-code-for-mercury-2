@@ -19,7 +19,7 @@ use once_cell::sync::Lazy;
 use sha2::{Digest, Sha256};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tracing::debug;
+// use tracing::debug;
 
 /// The AI Safety Decide mode identifier.
 pub const MODE_AI_SAFETY_DECIDE: &str = "aiSafetyDecide";
@@ -192,7 +192,7 @@ impl AiSafetyDecider {
 
     /// Parse a model safety decision from its response text.
     /// Defaults to ESCALATE if parsing fails (fail-safe).
-    pub fn parse_decision(content: &str, tool_name: &str) -> EvalResult {
+    pub fn parse_decision(content: &str, _tool_name: &str) -> EvalResult {
         let json_str = match crate::safety_lead::extract_json(content) {
             Some(s) => s,
             None => {

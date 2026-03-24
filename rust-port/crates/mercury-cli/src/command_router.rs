@@ -38,9 +38,9 @@ impl CommandRouter {
         F: Fn(&[String]) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        let handler = Box::new(move |parts: &[String]| -> Pin<Box<dyn Future<Output = ()> + Send>> {
+        let _handler = Box::new(move |parts: &[String]| -> Pin<Box<dyn Future<Output = ()> + Send>> {
             let parts_owned: Vec<String> = parts.to_vec();
-            let fut = handler(&parts_owned);
+            let _fut = handler(&parts_owned);
             Box::pin(async move {
                 // Note: we actually call handler above with borrowed data,
                 // but since we cloned into parts_owned we just await the future

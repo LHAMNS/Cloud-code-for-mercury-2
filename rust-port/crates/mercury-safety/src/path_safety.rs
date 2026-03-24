@@ -186,11 +186,11 @@ pub fn is_valid_git_ref(git_ref: &str) -> bool {
         && git_ref
             .chars()
             .next()
-            .map_or(false, |c| c.is_ascii_alphanumeric())
+            .is_some_and(|c| c.is_ascii_alphanumeric())
         && git_ref
             .chars()
             .last()
-            .map_or(false, |c| c.is_ascii_alphanumeric())
+            .is_some_and(|c| c.is_ascii_alphanumeric())
         && !git_ref.contains("..")
         && !git_ref.ends_with(".lock")
     {

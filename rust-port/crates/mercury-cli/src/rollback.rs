@@ -108,7 +108,7 @@ impl RollbackManager {
     pub fn full_rollback(
         &mut self,
         checkpoint_index: usize,
-        live_message_count: usize,
+        _live_message_count: usize,
         messages: &[serde_json::Value],
     ) -> RollbackResult {
         let cp = match self.checkpoints.get(checkpoint_index) {

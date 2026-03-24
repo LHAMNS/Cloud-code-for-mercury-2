@@ -435,7 +435,7 @@ pub fn draw_box(title: &str, content_lines: &[&str], width: usize) -> String {
     // Content lines
     for line in content_lines {
         let vis = visible_len(line);
-        let pad = if inner > vis { inner - vis } else { 0 };
+        let pad = inner.saturating_sub(vis);
         out.push_str(&format!(
             "  \u{2502} {line}{pad} \u{2502}\n",
             pad = " ".repeat(pad),

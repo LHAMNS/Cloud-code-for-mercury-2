@@ -265,10 +265,8 @@ impl ToolExecutor {
         match glob::glob(&full_pattern) {
             Ok(entries) => {
                 let mut files: Vec<String> = Vec::new();
-                for entry in entries {
-                    if let Ok(path) = entry {
-                        files.push(path.to_string_lossy().to_string());
-                    }
+                for path in entries.flatten() {
+                    files.push(path.to_string_lossy().to_string());
                 }
                 files.sort();
                 if files.is_empty() {
@@ -295,7 +293,7 @@ impl ToolExecutor {
             return ToolResult::error(e);
         }
         let output_mode = args.get("output_mode").and_then(|v| v.as_str()).unwrap_or("files_with_matches");
-        let context_lines = args.get("context").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+        let _context_lines = args.get("context").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         let case_insensitive = args.get("-i").and_then(|v| v.as_bool()).unwrap_or(false);
 
         let regex = match if case_insensitive {
@@ -338,7 +336,7 @@ impl ToolExecutor {
                         "count" => {
                             results.push(format!("{}:{}", file_path.display(), file_matches.len()));
                         }
-                        "content" | _ => {
+                        _ => {
                             for (num, line) in &file_matches {
                                 results.push(format!("{}:{}:{}", file_path.display(), num, line));
                             }

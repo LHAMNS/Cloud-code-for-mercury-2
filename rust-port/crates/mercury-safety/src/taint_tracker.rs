@@ -215,7 +215,7 @@ impl TaintTracker {
             .or_else(|| {
                 tool_args
                     .get("command")
-                    .filter(|v| v.as_str().map_or(false, |s| s.len() <= 50))
+                    .filter(|v| v.as_str().is_some_and(|s| s.len() <= 50))
             })
             .and_then(|v| v.as_str())
             .unwrap_or("");
@@ -251,11 +251,11 @@ impl TaintTracker {
                     continue;
                 }
                 // Only check if tool args contain a tainted snippet (forward direction).
-                if normalized_args.contains(&entry.snippet) {
-                    if UNTRUSTED_TAGS.contains(entry.tag.as_str()) {
-                        found_tags.insert(entry.tag.clone());
-                        found_sources.insert(entry.source.clone());
-                    }
+                if normalized_args.contains(&entry.snippet)
+                    && UNTRUSTED_TAGS.contains(entry.tag.as_str())
+                {
+                    found_tags.insert(entry.tag.clone());
+                    found_sources.insert(entry.source.clone());
                 }
             }
         }

@@ -135,11 +135,7 @@ impl LspClient {
 
     /// Normalize a file:// URI to a local path.
     pub fn uri_to_path(uri: &str) -> Option<PathBuf> {
-        if let Some(path) = uri.strip_prefix("file://") {
-            Some(PathBuf::from(path))
-        } else {
-            None
-        }
+        uri.strip_prefix("file://").map(PathBuf::from)
     }
 
     /// Convert a local path to file:// URI.

@@ -14,11 +14,10 @@
 //   - Path traversal prevention
 //   - Null byte rejection
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-use crate::path_safety::{is_in_workspace, resolve_via_ancestor};
+use crate::path_safety::resolve_via_ancestor;
 
 // ── Errors ──────────────────────────────────────────────────────────────────
 
@@ -209,20 +208,15 @@ const SYSTEM_DENY_WRITE: &[&str] = &[
 // ── Symlink policy ──────────────────────────────────────────────────────────
 
 /// How symlinks are handled during path checks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SymlinkPolicy {
     /// Follow symlinks and verify the resolved target is within workspace.
+    #[default]
     Resolve,
     /// Reject any path that is a symlink.
     Block,
     /// No symlink checking.
     Allow,
-}
-
-impl Default for SymlinkPolicy {
-    fn default() -> Self {
-        Self::Resolve
-    }
 }
 
 // ── Sandbox ─────────────────────────────────────────────────────────────────

@@ -2,7 +2,7 @@
 // URL parsing, IP address validation, block internal/private IPs.
 // Ported from: src/utils/ssrf.js
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::IpAddr;
 use thiserror::Error;
 use url::Url;
 
@@ -79,8 +79,7 @@ pub fn normalize_ip(ip: &str) -> String {
             return "::".to_string();
         }
         // Check for ffff-mapped in expanded form
-        if expanded.starts_with("0000:0000:0000:0000:0000:ffff:") {
-            let hex_part = &expanded[30..];
+        if let Some(hex_part) = expanded.strip_prefix("0000:0000:0000:0000:0000:ffff:") {
             let parts: Vec<&str> = hex_part.split(':').collect();
             if parts.len() == 2 {
                 if let (Ok(ab), Ok(cd)) = (
@@ -128,7 +127,7 @@ pub fn expand_ipv6(ip: &str) -> String {
         };
         let missing = 8usize.saturating_sub(left.len() + right.len());
         let mut result: Vec<String> = left.iter().map(|s| s.to_string()).collect();
-        result.extend(std::iter::repeat("0".to_string()).take(missing));
+        result.extend(std::iter::repeat_n("0".to_string(), missing));
         result.extend(right.iter().map(|s| s.to_string()));
         result
     } else {
@@ -154,10 +153,10 @@ pub fn is_private_ip(ip: &str) -> bool {
     }
 
     // Reject non-standard IP representations (octal, hex, decimal)
-    if (ip.starts_with("0") && ip.len() > 1 && ip.chars().nth(1).map_or(false, |c| c.is_ascii_digit()))
+    if (ip.starts_with("0") && ip.len() > 1 && ip.chars().nth(1).is_some_and(|c| c.is_ascii_digit()))
         || ip.starts_with("0x")
         || ip.starts_with("0X")
-        || (ip.chars().all(|c| c.is_ascii_digit()) && ip.contains('.') == false && ip.len() > 2)
+        || (ip.chars().all(|c| c.is_ascii_digit()) && !ip.contains('.') && ip.len() > 2)
     {
         return true; // Block non-standard IP formats
     }

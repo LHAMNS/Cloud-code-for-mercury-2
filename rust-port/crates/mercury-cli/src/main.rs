@@ -7,7 +7,7 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use clap::Parser;
-use tracing::{error, info, warn};
+use tracing::{error, warn};
 
 mod command_router;
 mod history;

@@ -343,10 +343,10 @@ impl MercuryClient {
                         .map(|r| r == "assistant")
                         .unwrap_or(false);
 
-                    if !(is_assistant && has_tool_calls) {
-                        if map.get("content").map(|v| v.is_null()).unwrap_or(true) {
-                            map.insert("content".to_string(), Value::String(String::new()));
-                        }
+                    if !(is_assistant && has_tool_calls)
+                        && map.get("content").map(|v| v.is_null()).unwrap_or(true)
+                    {
+                        map.insert("content".to_string(), Value::String(String::new()));
                     }
                 }
                 m
@@ -569,7 +569,7 @@ fn rand_jitter_ms() -> u32 {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
-    (now.subsec_nanos() % 500) as u32
+    now.subsec_nanos() % 500
 }
 
 /// Check if a reqwest error is retryable (connection/timeout errors).

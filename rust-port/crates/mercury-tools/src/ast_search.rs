@@ -2,7 +2,6 @@
 //! Uses regex patterns to find function/class/method definitions.
 
 use regex::Regex;
-use std::collections::HashMap;
 use std::path::Path;
 use once_cell::sync::Lazy;
 

@@ -2,8 +2,8 @@
 // Semantic color names for terminal output.
 // Used by display, autocomplete, agent_tabs, and any module needing colored terminal output.
 
-use crossterm::style::{Attribute, Color, SetAttribute, SetForegroundColor, SetBackgroundColor, ResetColor};
-use std::fmt;
+// crossterm style types reserved for future use
+// use crossterm::style::{Attribute, Color, SetAttribute, SetForegroundColor, SetBackgroundColor, ResetColor};
 
 // ---------------------------------------------------------------------------
 // ANSI escape prefix (for raw escape sequences where crossterm is overkill)
@@ -104,7 +104,7 @@ pub fn brand_gradient() -> [String; 6] {
 // ---------------------------------------------------------------------------
 
 /// A terminal style consisting of optional foreground color, attributes, and reset.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Style {
     pub fg: Option<String>,
     pub bg: Option<String>,
@@ -112,19 +112,6 @@ pub struct Style {
     pub dim: bool,
     pub italic: bool,
     pub underline: bool,
-}
-
-impl Default for Style {
-    fn default() -> Self {
-        Self {
-            fg: None,
-            bg: None,
-            bold: false,
-            dim: false,
-            italic: false,
-            underline: false,
-        }
-    }
 }
 
 impl Style {

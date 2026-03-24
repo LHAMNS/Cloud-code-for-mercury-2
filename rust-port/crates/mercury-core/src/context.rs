@@ -56,7 +56,7 @@ pub fn get_effective_input(max_context_tokens: u64) -> u64 {
 /// Estimate tokens from a string using ceil(bytes/4) heuristic.
 pub fn estimate_tokens(text: &str) -> u64 {
     let byte_len = text.len() as u64;
-    (byte_len + APPROX_BYTES_PER_TOKEN - 1) / APPROX_BYTES_PER_TOKEN // ceiling division
+    byte_len.div_ceil(APPROX_BYTES_PER_TOKEN)
 }
 
 /// Estimate tokens for a list of messages.
@@ -208,7 +208,7 @@ pub fn force_compact(
 /// Trim stale tool outputs in older messages to reduce token usage.
 /// Keeps the most recent `keep_turns` user/assistant turns intact.
 pub fn trim_stale_tool_outputs(
-    messages: &mut Vec<Message>,
+    messages: &mut [Message],
     keep_turns: usize,
     max_tool_output_tokens: usize,
 ) {
@@ -245,7 +245,7 @@ pub fn trim_stale_tool_outputs(
 }
 
 /// Clear a specific tool output by tool_call_id.
-pub fn clear_tool_output(messages: &mut Vec<Message>, tool_call_id: &str) {
+pub fn clear_tool_output(messages: &mut [Message], tool_call_id: &str) {
     for msg in messages.iter_mut() {
         if msg.role == "tool" {
             if let Some(ref id) = msg.tool_call_id {

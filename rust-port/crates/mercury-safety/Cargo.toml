@@ -20,6 +20,9 @@ once_cell = { workspace = true }
 url = { workspace = true }
 sha2 = { workspace = true }
 
+[features]
+async-dns = []
+
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }

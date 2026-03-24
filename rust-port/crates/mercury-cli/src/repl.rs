@@ -11,9 +11,8 @@ use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use serde_json::Value;
 
-use mercury_core::config::{ClientConfig, ModelLimits, MERCURY_MODEL};
-use mercury_core::conversation::{Conversation, Message, Usage};
-use mercury_core::context::estimate_tokens;
+use mercury_core::config::{ClientConfig, ModelLimits};
+use mercury_core::conversation::{Conversation, Usage};
 use mercury_core::memory::MemoryManager;
 
 /// Configuration for creating a new REPL instance.
@@ -257,7 +256,7 @@ impl MercuryRepl {
                 println!("\x1b[33mCompressing context...\x1b[0m");
                 self.conversation.compress(
                     &() as &dyn std::any::Any,
-                    self.memory.as_ref().map(|m| "").map(|_| ""),
+                    self.memory.as_ref().map(|_m| "").map(|_| ""),
                     false,
                 ).await?;
                 println!("\x1b[32mContext compressed.\x1b[0m");

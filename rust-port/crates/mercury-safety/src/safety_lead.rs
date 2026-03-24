@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use sha2::{Digest, Sha256};
-use tracing::debug;
+// use tracing::debug;
 
 // ---------------------------------------------------------------------------
 // Decisions
@@ -477,7 +477,7 @@ impl SafetyLead {
         &mut self,
         tool_name: &str,
         tool_args: &serde_json::Value,
-        metadata: &ActionMetadata,
+        _metadata: &ActionMetadata,
     ) -> SafetyDecision {
         if !self.enabled {
             return SafetyDecision::new(Decision::Allow, RiskLevel::Low, vec![], None, None);
@@ -725,7 +725,7 @@ impl SafetyLead {
         false
     }
 
-    fn fail_safe_decision(&self, kind: &str, err_msg: &str) -> SafetyDecision {
+    fn fail_safe_decision(&self, _kind: &str, err_msg: &str) -> SafetyDecision {
         if self.fail_mode == FailMode::Closed {
             SafetyDecision::new(
                 Decision::Deny,

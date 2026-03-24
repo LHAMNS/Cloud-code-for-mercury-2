@@ -251,6 +251,11 @@ impl ToolExecutor {
         let path = args.get("path").and_then(|v| v.as_str())
             .unwrap_or_else(|| self.workspace.to_str().unwrap_or("."));
 
+        // Sandbox check: verify the search path is within allowed boundaries
+        if let Err(e) = self.check_read_path(path) {
+            return ToolResult::error(e);
+        }
+
         let full_pattern = if Path::new(pattern).is_absolute() {
             pattern.to_string()
         } else {
@@ -284,6 +289,11 @@ impl ToolExecutor {
         };
         let path = args.get("path").and_then(|v| v.as_str())
             .unwrap_or_else(|| self.workspace.to_str().unwrap_or("."));
+
+        // Sandbox check: verify the search path is within allowed boundaries
+        if let Err(e) = self.check_read_path(path) {
+            return ToolResult::error(e);
+        }
         let output_mode = args.get("output_mode").and_then(|v| v.as_str()).unwrap_or("files_with_matches");
         let context_lines = args.get("context").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         let case_insensitive = args.get("-i").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -406,21 +416,36 @@ impl ToolExecutor {
         }
     }
 
-    /// HTTP fetch with basic SSRF protection.
+    /// HTTP fetch with comprehensive SSRF protection.
     async fn execute_fetch(&self, args: &Value) -> ToolResult {
         let url = match args.get("url").and_then(|v| v.as_str()) {
             Some(u) => u,
             None => return ToolResult::error("Missing required parameter: url".into()),
         };
 
-        // Basic SSRF check
+        // Comprehensive SSRF check using the safety module
+        // Step 1: URL-level check (protocol, credentials, hostname patterns)
+        match mercury_safety::ssrf::check_url_ssrf(url) {
+            Ok(result) => {
+                if !result.allowed {
+                    return ToolResult::error(format!(
+                        "SSRF protection: {}",
+                        result.reason.unwrap_or_else(|| "blocked".to_string())
+                    ));
+                }
+            }
+            Err(e) => return ToolResult::error(format!("SSRF protection: {}", e)),
+        }
+
+        // Step 2: Hostname-based SSRF check (checks for private/dangerous hostnames)
         if let Ok(parsed) = url::Url::parse(url) {
             if let Some(host) = parsed.host_str() {
-                if host == "localhost" || host == "127.0.0.1" || host == "::1"
-                    || host.starts_with("192.168.") || host.starts_with("10.")
-                    || host.starts_with("172.") || host == "0.0.0.0"
-                {
-                    return ToolResult::error("SSRF protection: cannot fetch internal/private URLs".into());
+                let hostname_result = mercury_safety::ssrf::check_ssrf_hostname(host);
+                if !hostname_result.allowed {
+                    return ToolResult::error(format!(
+                        "SSRF protection: {}",
+                        hostname_result.reason.unwrap_or_else(|| "dangerous hostname".to_string())
+                    ));
                 }
             }
         }

@@ -1,0 +1,25 @@
+[package]
+name = "mercury-agents"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Agent system for Mercury Code - subagent, definitions, teams"
+
+[dependencies]
+mercury-core = { path = "../mercury-core" }
+mercury-safety = { path = "../mercury-safety" }
+mercury-tools = { path = "../mercury-tools" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+once_cell = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }

@@ -1,0 +1,1 @@
+futures::stream::Iter<std::iter::Chain<std::iter::Once<Result<axum::response::sse::Event, _>>, std::iter::Map<std::vec::IntoIter<SsePayload>, {closure@crates/mercury-web/src/server.rs:713:40: 713:49}>>>

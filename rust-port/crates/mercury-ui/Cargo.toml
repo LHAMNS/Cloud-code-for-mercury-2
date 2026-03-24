@@ -1,0 +1,16 @@
+[package]
+name = "mercury-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Terminal UI for Mercury Code - display, autocomplete, syntax highlighting"
+
+[dependencies]
+crossterm = { workspace = true }
+syntect = { workspace = true }
+termimad = { workspace = true }
+colored = { workspace = true }
+regex = { workspace = true }
+unicode-width = "0.2"
+
+[dev-dependencies]

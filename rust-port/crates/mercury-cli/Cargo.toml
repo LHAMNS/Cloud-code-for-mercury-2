@@ -1,0 +1,45 @@
+[package]
+name = "mercury-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CLI binary for Mercury Code - REPL, commands, hooks, MCP"
+
+[[bin]]
+name = "mercury-code"
+path = "src/main.rs"
+
+[dependencies]
+mercury-core = { path = "../mercury-core" }
+mercury-safety = { path = "../mercury-safety" }
+mercury-tools = { path = "../mercury-tools" }
+mercury-agents = { path = "../mercury-agents" }
+mercury-ui = { path = "../mercury-ui" }
+mercury-web = { path = "../mercury-web" }
+tokio = { workspace = true }
+clap = { workspace = true }
+rustyline = { workspace = true }
+crossterm = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+dirs = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+once_cell = { workspace = true }
+regex = { workspace = true }
+colored = { workspace = true }
+glob = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+assert_cmd = { workspace = true }
+predicates = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }

@@ -1,0 +1,29 @@
+[package]
+name = "mercury-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Web UI server for Mercury Code - HTTP server, WebSocket, static files"
+
+[dependencies]
+mercury-core = { path = "../mercury-core" }
+tokio = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tokio-tungstenite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+futures = { workspace = true }
+chrono = { workspace = true }
+async-stream = "0.3"
+urlencoding = "2"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }

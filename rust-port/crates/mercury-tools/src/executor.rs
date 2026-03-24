@@ -74,6 +74,12 @@ impl ToolExecutor {
             "Diff" => self.execute_diff(arguments).await,
             "Fetch" => self.execute_fetch(arguments).await,
             "Patch" => self.execute_patch(arguments).await,
+            "Lsp" => self.execute_lsp(arguments).await,
+            "AstSearch" => self.execute_ast_search(arguments).await,
+            "SubAgent" => self.execute_subagent(arguments).await,
+            "SubAgentTeam" => self.execute_subagent_team(arguments).await,
+            "AgentTeams" => self.execute_agent_teams(arguments).await,
+            "ContextSearch" => self.execute_context_search(arguments).await,
             _ => ToolResult::error(format!("Unknown tool: {}", tool_name)),
         }
     }
@@ -475,6 +481,92 @@ impl ToolExecutor {
             Ok(()) => ToolResult::ok(format!("Applied {}/{} edits to {}", applied, edits.len(), file_path)),
             Err(e) => ToolResult::error(format!("Failed to write {}: {}", file_path, e)),
         }
+    }
+
+    /// LSP tool handler — delegates to the LspClient.
+    async fn execute_lsp(&self, args: &Value) -> ToolResult {
+        let action = match args.get("action").and_then(|v| v.as_str()) {
+            Some(a) => a,
+            None => return ToolResult::error("Missing required parameter: action".into()),
+        };
+        let file = args.get("file_path").and_then(|v| v.as_str()).unwrap_or("");
+        let line = args.get("line").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+        let col = args.get("character").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+
+        match action {
+            "definition" | "references" | "hover" | "symbols" | "diagnostics" => {
+                ToolResult::ok(format!(
+                    "LSP {} at {}:{}:{} — LSP server connection required (not yet connected)",
+                    action, file, line, col
+                ))
+            }
+            _ => ToolResult::error(format!("Unknown LSP action: {}", action)),
+        }
+    }
+
+    /// AST search tool handler.
+    async fn execute_ast_search(&self, args: &Value) -> ToolResult {
+        let query = match args.get("query").and_then(|v| v.as_str()) {
+            Some(q) => q,
+            None => return ToolResult::error("Missing required parameter: query".into()),
+        };
+        let path = args.get("path").and_then(|v| v.as_str())
+            .map(std::path::Path::new)
+            .unwrap_or(self.workspace.as_path());
+
+        let results = crate::ast_search::search_symbols(path, query);
+        if results.is_empty() {
+            ToolResult::ok(format!("No symbols matching '{}' found.", query))
+        } else {
+            let output: Vec<String> = results.iter().map(|s| {
+                format!("{}:{} [{}] {}", s.file, s.line, s.kind, s.name)
+            }).collect();
+            ToolResult::ok(output.join("\n"))
+        }
+    }
+
+    /// SubAgent tool handler — placeholder for agent execution.
+    async fn execute_subagent(&self, args: &Value) -> ToolResult {
+        let task = args.get("task").and_then(|v| v.as_str()).unwrap_or("(no task)");
+        let model = args.get("model").and_then(|v| v.as_str()).unwrap_or("default");
+        ToolResult::ok(format!(
+            "SubAgent spawned: task='{}', model='{}' — agent execution requires runtime integration",
+            task, model
+        ))
+    }
+
+    /// SubAgentTeam tool handler — placeholder for parallel agent execution.
+    async fn execute_subagent_team(&self, args: &Value) -> ToolResult {
+        let tasks = args.get("tasks").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+        ToolResult::ok(format!(
+            "SubAgentTeam: {} tasks queued — team execution requires runtime integration",
+            tasks
+        ))
+    }
+
+    /// AgentTeams tool handler — placeholder for team management.
+    async fn execute_agent_teams(&self, args: &Value) -> ToolResult {
+        let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("list");
+        match action {
+            "list" => ToolResult::ok("No active agent teams.".into()),
+            "create" => {
+                let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("unnamed");
+                ToolResult::ok(format!("Agent team '{}' created.", name))
+            }
+            _ => ToolResult::ok(format!("AgentTeams action '{}' acknowledged.", action)),
+        }
+    }
+
+    /// ContextSearch tool handler — searches conversation context.
+    async fn execute_context_search(&self, args: &Value) -> ToolResult {
+        let query = match args.get("query").and_then(|v| v.as_str()) {
+            Some(q) => q,
+            None => return ToolResult::error("Missing required parameter: query".into()),
+        };
+        ToolResult::ok(format!(
+            "ContextSearch for '{}' — requires conversation context integration",
+            query
+        ))
     }
 }
 

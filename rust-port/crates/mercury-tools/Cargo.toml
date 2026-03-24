@@ -1,0 +1,29 @@
+[package]
+name = "mercury-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Tool system for Mercury Code - definitions, executor, AST search, LSP"
+
+[dependencies]
+mercury-core = { path = "../mercury-core" }
+mercury-safety = { path = "../mercury-safety" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+regex = { workspace = true }
+glob = { workspace = true }
+globset = { workspace = true }
+walkdir = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+lsp-types = { workspace = true }
+url = { workspace = true }
+once_cell = { workspace = true }
+reqwest = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }

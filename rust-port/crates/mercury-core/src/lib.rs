@@ -13,4 +13,8 @@ pub use providers::{Provider, get_provider, get_default_provider, list_providers
 pub use client::MercuryClient;
 pub use conversation::Conversation;
 pub use memory::{MemoryManager, ConversationLog};
-pub use context::{estimate_tokens, estimate_messages_tokens, compress_context, super_compress_context};
+pub use context::{
+    estimate_tokens, estimate_messages_tokens, compress_context, super_compress_context,
+    force_compact, trim_stale_tool_outputs, clear_tool_output, aggressive_trim,
+    get_effective_input, get_context_stats, ContextStats,
+};

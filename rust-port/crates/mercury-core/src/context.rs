@@ -36,9 +36,27 @@ pub fn update_api_usage(usage: &Usage, state: &mut CompactionState) {
     state.last_api_completion_tokens = usage.completion_tokens;
 }
 
-/// Estimate tokens from a string using bytes/4 heuristic.
+// ── Constants matching JS context.js ──────────────────────────────────────
+const EFFECTIVE_CONTEXT_PERCENT: f64 = 0.95;
+const COMPACT_THRESHOLD: f64 = 0.90;
+const SUPER_COMPACT_THRESHOLD: f64 = 0.50;
+const KEEP_TURNS: usize = 4;
+const KEEP_TURNS_SUPER: usize = 2;
+const USER_MSG_BUDGET: usize = 20000;
+const MAX_COMPACT_BEFORE_WARN: u32 = 5;
+const MAX_COMPACT_DEPTH: u32 = 8;
+const APPROX_BYTES_PER_TOKEN: u64 = 4;
+const MAX_TOOL_OUTPUT_TOKENS: usize = 8000;
+
+/// Get the effective input token limit (95% of max context).
+pub fn get_effective_input(max_context_tokens: u64) -> u64 {
+    (max_context_tokens as f64 * EFFECTIVE_CONTEXT_PERCENT).floor() as u64
+}
+
+/// Estimate tokens from a string using ceil(bytes/4) heuristic.
 pub fn estimate_tokens(text: &str) -> u64 {
-    (text.len() as u64) / 4
+    let byte_len = text.len() as u64;
+    (byte_len + APPROX_BYTES_PER_TOKEN - 1) / APPROX_BYTES_PER_TOKEN // ceiling division
 }
 
 /// Estimate tokens for a list of messages.
@@ -79,18 +97,28 @@ pub fn get_context_stats(
     messages: &[Message],
     system_prompt: &str,
     state: &CompactionState,
+    max_context_tokens: u64,
 ) -> ContextStats {
     let system_tokens = estimate_tokens(system_prompt) + 4;
     let message_tokens = estimate_messages_tokens(messages);
     let total = system_tokens + message_tokens;
+    let effective = get_effective_input(max_context_tokens);
+    let pct = if max_context_tokens > 0 {
+        (total as f64 / max_context_tokens as f64) * 100.0
+    } else {
+        0.0
+    };
 
     ContextStats {
         system_tokens,
         message_tokens,
         total_tokens: total,
+        effective,
+        pct,
         message_count: messages.len(),
         compressions: state.total_compressions,
         super_compressions: state.total_super_compressions,
+        api_reported: state.last_api_prompt_tokens,
     }
 }
 
@@ -99,9 +127,12 @@ pub struct ContextStats {
     pub system_tokens: u64,
     pub message_tokens: u64,
     pub total_tokens: u64,
+    pub effective: u64,
+    pub pct: f64,
     pub message_count: usize,
     pub compressions: u32,
     pub super_compressions: u32,
+    pub api_reported: Option<u64>,
 }
 
 /// Compress context by removing old tool results and trimming stale output.
@@ -164,6 +195,125 @@ pub fn compress_context(
     }
 }
 
+/// Force compact — same as compress but with threshold=0 (always compacts).
+/// Used by the /compact command.
+pub fn force_compact(
+    messages: &mut Vec<Message>,
+    system_prompt: &str,
+    state: &mut CompactionState,
+) {
+    compress_context(messages, system_prompt, state);
+}
+
+/// Trim stale tool outputs in older messages to reduce token usage.
+/// Keeps the most recent `keep_turns` user/assistant turns intact.
+pub fn trim_stale_tool_outputs(
+    messages: &mut Vec<Message>,
+    keep_turns: usize,
+    max_tool_output_tokens: usize,
+) {
+    let max_tool_output_chars = max_tool_output_tokens * 4; // approximate
+    // Count turns from the end to find the cutoff
+    let mut turn_count = 0;
+    let mut cutoff = messages.len();
+    for i in (0..messages.len()).rev() {
+        if messages[i].role == "user" {
+            turn_count += 1;
+            if turn_count >= keep_turns {
+                cutoff = i;
+                break;
+            }
+        }
+    }
+
+    // Trim tool outputs before the cutoff
+    for msg in messages[..cutoff].iter_mut() {
+        if msg.role == "tool" {
+            if let Some(ref content) = msg.content {
+                if content.len() > max_tool_output_chars {
+                    let truncated = format!(
+                        "{}...\n[Tool output trimmed: {} → {} chars]",
+                        &content[..max_tool_output_chars.min(content.len())],
+                        content.len(),
+                        max_tool_output_chars,
+                    );
+                    msg.content = Some(truncated);
+                }
+            }
+        }
+    }
+}
+
+/// Clear a specific tool output by tool_call_id.
+pub fn clear_tool_output(messages: &mut Vec<Message>, tool_call_id: &str) {
+    for msg in messages.iter_mut() {
+        if msg.role == "tool" {
+            if let Some(ref id) = msg.tool_call_id {
+                if id == tool_call_id {
+                    msg.content = Some("[Tool output cleared to save context space]".to_string());
+                }
+            }
+        }
+    }
+}
+
+/// Aggressive trim — removes old messages keeping only recent turns.
+/// Also deduplicates repeated file reads.
+pub fn aggressive_trim(messages: &mut Vec<Message>, keep_turns: usize) {
+    if messages.len() <= keep_turns * 2 {
+        return;
+    }
+
+    // First trim stale tool outputs
+    trim_stale_tool_outputs(messages, keep_turns, MAX_TOOL_OUTPUT_TOKENS);
+
+    // Count user messages from the end to determine cutoff
+    let mut turn_count = 0;
+    let mut cutoff = 0;
+    for i in (0..messages.len()).rev() {
+        if messages[i].role == "user" {
+            turn_count += 1;
+            if turn_count >= keep_turns {
+                cutoff = i;
+                break;
+            }
+        }
+    }
+
+    if cutoff > 0 {
+        // Collect user messages from the removed section to preserve context
+        let mut preserved_user_msgs: Vec<String> = Vec::new();
+        let mut budget = USER_MSG_BUDGET;
+        for msg in messages[..cutoff].iter().rev() {
+            if msg.role == "user" {
+                if let Some(ref content) = msg.content {
+                    if content.len() <= budget {
+                        preserved_user_msgs.push(content.clone());
+                        budget -= content.len();
+                    }
+                }
+            }
+        }
+        preserved_user_msgs.reverse();
+
+        // Remove old messages
+        messages.drain(0..cutoff);
+
+        // Insert summary of removed context
+        let summary = if preserved_user_msgs.is_empty() {
+            format!("[Context aggressively trimmed: {} old messages removed]", cutoff)
+        } else {
+            format!(
+                "[Context aggressively trimmed: {} old messages removed. Key user requests preserved:]\n{}",
+                cutoff,
+                preserved_user_msgs.join("\n---\n")
+            )
+        };
+        messages.insert(0, Message::user(&summary));
+        messages.insert(1, Message::assistant("Understood. Continuing with the preserved context."));
+    }
+}
+
 /// Super compress context - more aggressive trimming.
 pub fn super_compress_context(
     messages: &mut Vec<Message>,
@@ -175,12 +325,12 @@ pub fn super_compress_context(
     // First do normal compression
     compress_context(messages, system_prompt, state);
 
-    if messages.len() <= 4 {
+    if messages.len() <= KEEP_TURNS_SUPER * 2 {
         return;
     }
 
-    // Keep only the last 4 messages + a summary of what came before
-    let keep_count = 4.min(messages.len());
+    // Keep only the last KEEP_TURNS_SUPER*2 messages + a summary of what came before
+    let keep_count = (KEEP_TURNS_SUPER * 2).min(messages.len());
     let remove_count = messages.len() - keep_count;
 
     if remove_count > 0 {
@@ -209,6 +359,8 @@ mod tests {
         assert_eq!(estimate_tokens(""), 0);
         assert_eq!(estimate_tokens("abcd"), 1); // 4 bytes / 4
         assert_eq!(estimate_tokens("abcdefgh"), 2); // 8 bytes / 4
+        assert_eq!(estimate_tokens("abc"), 1); // ceil(3/4) = 1
+        assert_eq!(estimate_tokens("abcde"), 2); // ceil(5/4) = 2
     }
 
     #[test]
@@ -309,10 +461,75 @@ mod tests {
             Message::assistant("world"),
         ];
         let state = create_compaction_state();
-        let stats = get_context_stats(&messages, "system prompt", &state);
+        let stats = get_context_stats(&messages, "system prompt", &state, 128000);
         assert!(stats.total_tokens > 0);
         assert_eq!(stats.message_count, 2);
         assert_eq!(stats.compressions, 0);
+    }
+
+    #[test]
+    fn test_get_effective_input() {
+        assert_eq!(get_effective_input(128000), 121600); // 128000 * 0.95
+        assert_eq!(get_effective_input(0), 0);
+    }
+
+    #[test]
+    fn test_force_compact() {
+        let mut messages: Vec<Message> = (0..10)
+            .flat_map(|i| vec![Message::user(&format!("q{}", i)), Message::assistant(&format!("a{}", i))])
+            .collect();
+        let mut state = create_compaction_state();
+        force_compact(&mut messages, "sys", &mut state);
+        assert!(state.total_compressions >= 1);
+    }
+
+    #[test]
+    fn test_trim_stale_tool_outputs() {
+        let long_output = "x".repeat(50000);
+        let mut messages = vec![
+            Message::user("old question"),
+            Message::tool_result("c1", &long_output),
+            Message::assistant("old answer"),
+            Message::user("new question"),
+            Message::assistant("new answer"),
+        ];
+        trim_stale_tool_outputs(&mut messages, 1, 100);
+        let tool_msg = messages.iter().find(|m| m.role == "tool").unwrap();
+        assert!(tool_msg.content.as_ref().unwrap().len() < 50000);
+        assert!(tool_msg.content.as_ref().unwrap().contains("trimmed"));
+    }
+
+    #[test]
+    fn test_clear_tool_output() {
+        let mut messages = vec![
+            Message::tool_result("c1", "some output"),
+            Message::tool_result("c2", "other output"),
+        ];
+        clear_tool_output(&mut messages, "c1");
+        assert!(messages[0].content.as_ref().unwrap().contains("cleared"));
+        assert_eq!(messages[1].content.as_deref(), Some("other output"));
+    }
+
+    #[test]
+    fn test_aggressive_trim() {
+        let mut messages: Vec<Message> = (0..30)
+            .flat_map(|i| vec![Message::user(&format!("q{}", i)), Message::assistant(&format!("a{}", i))])
+            .collect();
+        let original_len = messages.len();
+        aggressive_trim(&mut messages, 4);
+        assert!(messages.len() < original_len);
+    }
+
+    #[test]
+    fn test_context_stats_has_all_fields() {
+        let messages = vec![Message::user("hello"), Message::assistant("world")];
+        let state = create_compaction_state();
+        let stats = get_context_stats(&messages, "system prompt", &state, 128000);
+        assert!(stats.total_tokens > 0);
+        assert!(stats.effective > 0);
+        assert!(stats.pct > 0.0);
+        assert_eq!(stats.message_count, 2);
+        assert!(stats.api_reported.is_none());
     }
 
     #[test]

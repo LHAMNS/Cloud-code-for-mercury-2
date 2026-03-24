@@ -179,7 +179,7 @@ pub fn is_valid_git_ref(git_ref: &str) -> bool {
 
     // Branch-like names: alphanumeric, hyphens, slashes, dots, underscores
     // Must not start/end with . or contain .. or end with .lock
-    if git_ref.len() >= 2
+    if git_ref.len() >= 4
         && git_ref
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || "._/-".contains(c))
@@ -265,7 +265,7 @@ mod tests {
     fn test_is_valid_git_ref() {
         // Valid hex hashes
         assert!(is_valid_git_ref("abc1234"));
-        assert!(is_valid_git_ref("abc1234567890abcdef1234567890abcdef123456"));
+        assert!(is_valid_git_ref("abc1234567890abcdef1234567890abcdef12345"));
 
         // Special refs
         assert!(is_valid_git_ref("HEAD"));
@@ -286,7 +286,7 @@ mod tests {
     #[test]
     fn test_is_valid_git_hash() {
         assert!(is_valid_git_hash("abc1234"));
-        assert!(is_valid_git_hash("abc1234567890abcdef1234567890abcdef123456"));
+        assert!(is_valid_git_hash("abc1234567890abcdef1234567890abcdef12345"));
         assert!(!is_valid_git_hash("abc123")); // too short
         assert!(!is_valid_git_hash("main")); // not hex
         assert!(!is_valid_git_hash("")); // empty

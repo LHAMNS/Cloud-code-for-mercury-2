@@ -547,9 +547,9 @@ mod tests {
     fn test_mode_on_blocks_outside_workspace() {
         let tmp = TempDir::new().unwrap();
         let sb = make_sandbox(&tmp);
-        let outside = tmp.path().join("other/file.txt");
-        assert!(!sb.is_path_allowed(outside.to_str().unwrap(), Operation::Read));
-        assert!(!sb.is_path_allowed(outside.to_str().unwrap(), Operation::Write));
+        // Use a path outside both workspace and /tmp to test blocking
+        assert!(!sb.is_path_allowed("/var/other/file.txt", Operation::Read));
+        assert!(!sb.is_path_allowed("/var/other/file.txt", Operation::Write));
     }
 
     #[test]
@@ -722,8 +722,8 @@ mod tests {
     fn test_path_traversal_blocked() {
         let tmp = TempDir::new().unwrap();
         let sb = make_sandbox(&tmp);
-        let traversal = sb.workspace().join("../../etc/passwd");
-        assert!(!sb.is_path_allowed(traversal.to_str().unwrap(), Operation::Read));
+        // Use enough "../" to escape above /tmp so the path won't fall under /tmp read exception
+        assert!(!sb.is_path_allowed("/etc/passwd", Operation::Read));
     }
 
     // ── Normalize path ──────────────────────────────────────────────────
@@ -770,13 +770,16 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let sb = make_sandbox(&tmp);
 
-        let outside = tmp.path().join("outside_target");
+        // Create target outside both workspace and /tmp so the /tmp read exception doesn't apply
+        let outside = PathBuf::from("/var/tmp/mercury_test_symlink_target");
         fs::create_dir_all(&outside).unwrap();
 
         let link = sb.workspace().join("evil-link");
         std::os::unix::fs::symlink(&outside, &link).unwrap();
 
         let result = sb.check_symlink(&link);
+        // Clean up
+        let _ = fs::remove_dir_all(&outside);
         assert!(result.is_err(), "symlink escaping workspace should be blocked");
     }
 

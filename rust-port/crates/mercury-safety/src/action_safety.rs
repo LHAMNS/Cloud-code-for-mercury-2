@@ -132,7 +132,7 @@ static EXFIL_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
 // ---------------------------------------------------------------------------
 
 static API_REVIEW_TRIGGER: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)\b(?:approved|authorized|override|bypass|secret|token|password|credential)\b")
+    Regex::new(r"(?i)(?:\b|_)(?:approved|authorized|override|bypass|secret|token|password|credential)(?:\b|_)")
         .unwrap()
 });
 

@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 use std::env;
 
-use crate::providers::{get_model_limits, get_provider_api_key};
+use crate::providers::{get_model_limits, get_provider, get_provider_api_key};
 
 /// Default Mercury API base URL.
 pub const MERCURY_API_BASE: &str = "https://api.inceptionlabs.ai/v1";
@@ -98,11 +98,20 @@ pub fn normalize_client_config(
     let defaults = ClientConfig::default();
     let model_limits = ModelLimits::default();
 
+    // When a provider is specified, use its default model instead of the global default.
+    let default_model = if let Some(pn) = provider_name {
+        get_provider(pn)
+            .map(|p| p.default_model.clone())
+            .unwrap_or_else(|| defaults.model.clone())
+    } else {
+        defaults.model.clone()
+    };
+
     let mut config = ClientConfig {
         model: overrides
             .model
             .clone()
-            .unwrap_or_else(|| defaults.model.clone()),
+            .unwrap_or(default_model),
         max_tokens: overrides.max_tokens.unwrap_or(defaults.max_tokens),
         temperature: overrides.temperature.unwrap_or(defaults.temperature),
         reasoning_effort: overrides

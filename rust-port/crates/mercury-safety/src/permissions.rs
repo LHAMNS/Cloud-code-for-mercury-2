@@ -270,7 +270,23 @@ impl PermissionManager {
                 }
             }
             PermissionMode::Open => PermissionDecision::Allow,
-            PermissionMode::DontAsk => PermissionDecision::Allow,
+            PermissionMode::DontAsk => {
+                // DontAsk: deny everything not explicitly allowed by rules
+                // (opposite of Open — never prompt, just deny)
+                if READ_TOOLS.contains(&tool_name) {
+                    PermissionDecision::Allow
+                } else {
+                    for rule in self.rules.iter().chain(self.dynamic_rules.iter()) {
+                        if rule.action == RuleAction::Allow && rule.matches(tool_name, argument) {
+                            return {
+                                self.log_audit(tool_name, argument, &PermissionDecision::Allow);
+                                PermissionDecision::Allow
+                            };
+                        }
+                    }
+                    PermissionDecision::Deny
+                }
+            }
             PermissionMode::AiSafetyDecide => {
                 if READ_TOOLS.contains(&tool_name) {
                     PermissionDecision::Allow
@@ -322,7 +338,7 @@ impl PermissionManager {
             PermissionMode::Approval => TrustLevel::EditOnly,
             PermissionMode::AcceptEdits => TrustLevel::EditOnly,
             PermissionMode::Open => TrustLevel::Full,
-            PermissionMode::DontAsk => TrustLevel::Unrestricted,
+            PermissionMode::DontAsk => TrustLevel::None,
             PermissionMode::AiSafetyDecide => TrustLevel::Full,
         }
     }
@@ -423,6 +439,22 @@ mod tests {
         let mut pm = PermissionManager::new(PermissionMode::AiSafetyDecide);
         assert_eq!(pm.can_use_tool("Read", None), PermissionDecision::Allow);
         assert_eq!(pm.can_use_tool("Bash", None), PermissionDecision::AiDecide);
+    }
+
+    #[test]
+    fn test_dont_ask_mode_denies_non_allowed() {
+        let mut pm = PermissionManager::new(PermissionMode::DontAsk);
+        // Read tools allowed
+        assert_eq!(pm.can_use_tool("Read", None), PermissionDecision::Allow);
+        assert_eq!(pm.can_use_tool("Glob", None), PermissionDecision::Allow);
+        // Non-read tools denied without explicit allow rule
+        assert_eq!(pm.can_use_tool("Bash", None), PermissionDecision::Deny);
+        assert_eq!(pm.can_use_tool("Write", None), PermissionDecision::Deny);
+        // But explicitly allowed tools work
+        pm.add_rule(PermissionRule::allow("Bash"));
+        assert_eq!(pm.can_use_tool("Bash", None), PermissionDecision::Allow);
+        // Other tools still denied
+        assert_eq!(pm.can_use_tool("Write", None), PermissionDecision::Deny);
     }
 
     #[test]

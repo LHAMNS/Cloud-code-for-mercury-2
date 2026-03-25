@@ -627,6 +627,7 @@ export class ToolExecutor {
 
     // Sandbox path check (write)
     let resolvedPath = file_path;
+    let writeWarnings = [];
     if (this.sandbox?.enabled) {
       const check = this.sandbox.checkPath(file_path, 'write');
       if (!check.allowed) return `Error: ${check.reason}`;
@@ -641,8 +642,7 @@ export class ToolExecutor {
       if (!writeCheck.allowed) return `Error: ${writeCheck.reason}`;
       // Warnings are non-blocking but surfaced to the model
       if (writeCheck.warnings?.length > 0) {
-        // Log warnings but proceed with write
-        this._writeWarnings = writeCheck.warnings;
+        writeWarnings = writeCheck.warnings;
       }
     }
 
@@ -651,9 +651,8 @@ export class ToolExecutor {
       await mkdir(dir, { recursive: true });
       await _atomicWrite(resolvedPath, content, 'utf-8');
       let result = `Successfully wrote ${content.length} bytes to ${file_path}`;
-      if (this._writeWarnings?.length > 0) {
-        result += `\n⚠ Warnings:\n${this._writeWarnings.map(w => `  - ${w}`).join('\n')}`;
-        this._writeWarnings = null;
+      if (writeWarnings.length > 0) {
+        result += `\n⚠ Warnings:\n${writeWarnings.map(w => `  - ${w}`).join('\n')}`;
       }
       return result;
     } catch (err) {
@@ -759,11 +758,12 @@ export class ToolExecutor {
     }
 
     // Sandbox write validation (size, extensions, content scanning)
+    let editWarnings = [];
     if (this.sandbox?.enabled) {
       const writeCheck = this.sandbox.checkWrite(resolvedPath, newContent);
       if (!writeCheck.allowed) return `Error: ${writeCheck.reason}`;
       if (writeCheck.warnings?.length > 0) {
-        this._writeWarnings = writeCheck.warnings;
+        editWarnings = writeCheck.warnings;
       }
     }
 
@@ -771,9 +771,8 @@ export class ToolExecutor {
       await _atomicWrite(resolvedPath, newContent, 'utf-8');
       const replacements = replace_all ? count : 1;
       let result = `Successfully replaced ${replacements} occurrence${replacements > 1 ? 's' : ''} in ${file_path}`;
-      if (this._writeWarnings?.length > 0) {
-        result += `\n⚠ Warnings:\n${this._writeWarnings.map(w => `  - ${w}`).join('\n')}`;
-        this._writeWarnings = null;
+      if (editWarnings.length > 0) {
+        result += `\n⚠ Warnings:\n${editWarnings.map(w => `  - ${w}`).join('\n')}`;
       }
       return result;
     } catch (err) {
@@ -1278,6 +1277,12 @@ export class ToolExecutor {
         errors.push(`Edit ${i + 1}: old_string not found (may overlap with previous edit)`);
         continue;
       }
+      // Check uniqueness: if old_string appears more than once, require more context
+      const secondIdx = testContent.indexOf(old_string, idx + 1);
+      if (secondIdx !== -1) {
+        errors.push(`Edit ${i + 1}: old_string appears multiple times — provide more context for a unique match`);
+        continue;
+      }
       testContent = testContent.substring(0, idx) + new_string + testContent.substring(idx + old_string.length);
     }
 
@@ -1286,11 +1291,12 @@ export class ToolExecutor {
     }
 
     // Sandbox write validation (size, extensions, content scanning)
+    let patchWarnings = [];
     if (this.sandbox?.enabled) {
       const writeCheck = this.sandbox.checkWrite(resolvedPath, testContent);
       if (!writeCheck.allowed) return `Error: ${writeCheck.reason}`;
       if (writeCheck.warnings?.length > 0) {
-        this._writeWarnings = writeCheck.warnings;
+        patchWarnings = writeCheck.warnings;
       }
     }
 
@@ -1301,9 +1307,8 @@ export class ToolExecutor {
     }
 
     let result = `Applied ${edits.length}/${edits.length} edits to ${file_path}`;
-    if (this._writeWarnings?.length > 0) {
-      result += `\n⚠ Warnings:\n${this._writeWarnings.map(w => `  - ${w}`).join('\n')}`;
-      this._writeWarnings = null;
+    if (patchWarnings.length > 0) {
+      result += `\n⚠ Warnings:\n${patchWarnings.map(w => `  - ${w}`).join('\n')}`;
     }
     return result;
   }
@@ -1577,6 +1582,9 @@ export class ToolExecutor {
             stripOnRedirect: redirectParsed.origin !== parsedUrl.origin,
           });
           if (res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 303) {
+            resolve(this._fetch({ url: redirectUrl, method: 'GET', headers: redirectHeaders }, _redirectCount + 1));
+          } else if (redirectParsed.origin !== parsedUrl.origin) {
+            // Cross-origin 307/308: strip body to prevent data exfiltration via redirect
             resolve(this._fetch({ url: redirectUrl, method: 'GET', headers: redirectHeaders }, _redirectCount + 1));
           } else {
             resolve(this._fetch({ ...args, url: redirectUrl, headers: redirectHeaders }, _redirectCount + 1));

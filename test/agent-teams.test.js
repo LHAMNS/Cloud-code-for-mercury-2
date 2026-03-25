@@ -43,12 +43,12 @@ describe("AgentTeam", () => {
       assert.equal(next.title, "Task 1"); // Task 2 blocked
     });
 
-    it("dependent task becomes available after dependency completes", () => {
+    it("dependent task becomes available after dependency completes", async () => {
       const t1 = team.addTask({ title: "Task 1", detail: "" });
       const t2 = team.addTask({ title: "Task 2", detail: "", depends: [t1.id] });
 
       team.claimTask(t1.id, "mate-1");
-      team.completeTask(t1.id, "done");
+      await team.completeTask(t1.id, "done");
 
       const next = team.getNextTask();
       assert.equal(next.id, t2.id);
@@ -69,10 +69,10 @@ describe("AgentTeam", () => {
       assert.equal(secondClaim, false);
     });
 
-    it("completeTask sets result and timestamp", () => {
+    it("completeTask sets result and timestamp", async () => {
       const t1 = team.addTask({ title: "Task 1", detail: "" });
       team.claimTask(t1.id, "mate-1");
-      team.completeTask(t1.id, "Result here");
+      await team.completeTask(t1.id, "Result here");
 
       const task = team.tasks.get(t1.id);
       assert.equal(task.status, "completed");
@@ -80,14 +80,14 @@ describe("AgentTeam", () => {
       assert.ok(task.completedAt);
     });
 
-    it("getTaskSummary categorizes tasks correctly", () => {
+    it("getTaskSummary categorizes tasks correctly", async () => {
       team.addTask({ title: "T1", detail: "" });
       const t2 = team.addTask({ title: "T2", detail: "" });
       const t3 = team.addTask({ title: "T3", detail: "" });
 
       team.claimTask(t2.id, "mate-1");
       team.claimTask(t3.id, "mate-2");
-      team.completeTask(t3.id, "done");
+      await team.completeTask(t3.id, "done");
 
       const summary = team.getTaskSummary();
       assert.equal(summary.pending.length, 1);

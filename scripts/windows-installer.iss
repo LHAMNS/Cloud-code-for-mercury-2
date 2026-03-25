@@ -15,7 +15,7 @@
 ;   - Includes uninstaller
 
 #define MyAppName "Mercury Code"
-#define MyAppVersion "1.4.0"
+#define MyAppVersion "1.4.1"
 #define MyAppPublisher "Inception Labs"
 #define MyAppURL "https://github.com/LHAMNS/Cloud-code-for-mercury-2"
 #define MyAppExeName "mercury-code.exe"

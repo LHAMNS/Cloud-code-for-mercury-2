@@ -412,14 +412,16 @@ function sanitizeHtml(html) {
   const div = document.createElement('div');
   div.innerHTML = html;
   // Remove script tags, event handlers, etc.
-  const dangerous = div.querySelectorAll('script,iframe,object,embed,form,input,textarea,select,button');
+  const dangerous = div.querySelectorAll('script,iframe,object,embed,form,input,textarea,select,button,svg,math,style,link,base,meta');
   dangerous.forEach(el => el.remove());
-  // Remove event handler attributes from all elements
+  // Remove event handler attributes and dangerous URIs from all elements
   div.querySelectorAll('*').forEach(el => {
     [...el.attributes].forEach(attr => {
-      if (attr.name.startsWith('on') || attr.name === 'srcdoc' ||
-          (attr.name === 'href' && attr.value.trimStart().toLowerCase().startsWith('javascript:')) ||
-          (attr.name === 'src' && attr.value.trimStart().toLowerCase().startsWith('javascript:'))) {
+      const lName = attr.name.toLowerCase();
+      const lVal = attr.value.trimStart().toLowerCase();
+      if (lName.startsWith('on') || lName === 'srcdoc' || lName === 'formaction' ||
+          ((lName === 'href' || lName === 'src' || lName === 'action' || lName === 'xlink:href') &&
+           (lVal.startsWith('javascript:') || lVal.startsWith('data:') || lVal.startsWith('vbscript:')))) {
         el.removeAttribute(attr.name);
       }
     });
@@ -440,6 +442,7 @@ function renderMarkdownContent(text) {
     return `<pre>${escapeHtml(text)}</pre>`;
   }
 
+  html = sanitizeHtml(html);
   html = restoreMath(html, mathMap);
   return html;
 }

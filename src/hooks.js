@@ -418,8 +418,12 @@ export class HooksManager {
 
       // Send payload on stdin
       if (child.stdin) {
-        child.stdin.write(payload);
-        child.stdin.end();
+        try {
+          child.stdin.write(payload);
+          child.stdin.end();
+        } catch (_stdinErr) {
+          // Child may have already exited; stdin errors are non-fatal here
+        }
       }
     });
   }

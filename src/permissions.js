@@ -189,7 +189,7 @@ export class PermissionManager {
       if (settings.defaultMode && VALID_MODES.includes(settings.defaultMode)) {
         const newLevel = TRUST_LEVELS[settings.defaultMode] ?? 2;
         const currentLevel = TRUST_LEVELS[this.trustMode] ?? 2;
-        if (newLevel >= currentLevel) {
+        if (newLevel > currentLevel) {
           this.trustMode = settings.defaultMode;
         }
       }
@@ -303,6 +303,11 @@ export class PermissionManager {
    * @returns {Promise<{ decision: string, rule?: string, source?: string, updatedInput?: object }>}
    */
   async checkAsync(toolName, toolInput = {}, context = {}) {
+    // Ensure rules are loaded if a background reload was triggered
+    if (this._pendingLoad) {
+      await this._pendingLoad;
+      this._pendingLoad = null;
+    }
     // Run synchronous checks first
     const syncResult = this.check(toolName, toolInput, context);
 
@@ -711,7 +716,13 @@ export function getPermissionManager(options) {
     (options?.workspace && _globalPermissions.workspace !== options.workspace) ||
     (options?.trustMode && _globalPermissions.trustMode !== options.trustMode)
   ) {
+    const needsReload = !!_globalPermissions; // recreating means rules must be reloaded
     _globalPermissions = new PermissionManager(options);
+    if (needsReload) {
+      // Trigger async reload so callers don't silently use empty rules.
+      // The load() promise is awaited lazily in checkAsync() via _pendingLoad.
+      _globalPermissions._pendingLoad = _globalPermissions.load().catch(() => {});
+    }
   }
   return _globalPermissions;
 }

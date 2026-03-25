@@ -141,7 +141,11 @@ export class Conversation {
       return baseTokens + newTokens;
     }
     // No API usage yet — full heuristic
-    const sysTokens = estimateTokens(this.systemPrompt) + estimateTokens(this._memoryContent) + 4;
+    let sysTokens = estimateTokens(this.systemPrompt) + estimateTokens(this._memoryContent) + 4;
+    // Account for injected untrusted project config messages (2 extra messages)
+    if (this._untrustedProjectConfig) {
+      sysTokens += estimateTokens(this._untrustedProjectConfig) + 40; // overhead for nonce fences + ack
+    }
     return sysTokens + estimateMessagesTokens(this.messages);
   }
 

@@ -96,7 +96,7 @@ export class LspClient {
     this._config = null;
     this._initialized = false;
     this._responseHandlers = new Map();
-    this._buffer = "";
+    this._buffer = Buffer.alloc(0);
     this._diagnostics = new Map(); // uri → diagnostics[]
     this._requestId = { value: 0 };
     this._spawn = options.spawn || spawn;
@@ -188,13 +188,12 @@ export class LspClient {
         } catch (err) {
           debugLog("LspClient.stop.exit", err);
         }
+        // Null the instance reference only after the exit notification has been sent
+        this._process = null;
       });
     } catch (err) {
       debugLog("LspClient.stop.send", err);
     }
-
-    // Null the reference AFTER sending shutdown message
-    this._process = null;
 
     // Set a force-kill timeout and unref it so it doesn't block process exit
     const killTimer = setTimeout(() => {
@@ -212,7 +211,7 @@ export class LspClient {
     this._clearPendingResponses();
     this._initialized = false;
     this._openedFiles?.clear();
-    this._buffer = "";
+    this._buffer = Buffer.alloc(0);
   }
 
   /**
@@ -384,18 +383,21 @@ export class LspClient {
   }
 
   _onData(data) {
-    this._buffer += data.toString();
+    // Use Buffer for byte-accurate Content-Length handling (LSP specifies bytes, not chars)
+    const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    this._buffer = Buffer.concat([this._buffer, chunk]);
     // Safety: prevent unbounded buffer growth from malformed LSP servers
     if (this._buffer.length > 10 * 1024 * 1024) { // 10MB
-      this._buffer = "";
+      this._buffer = Buffer.alloc(0);
       return;
     }
 
     while (true) {
-      const headerEnd = this._buffer.indexOf("\r\n\r\n");
+      const headerEndStr = "\r\n\r\n";
+      const headerEnd = this._buffer.indexOf(headerEndStr);
       if (headerEnd === -1) break;
 
-      const header = this._buffer.slice(0, headerEnd);
+      const header = this._buffer.slice(0, headerEnd).toString('utf-8');
       const lengthMatch = header.match(/Content-Length: (\d+)/);
       if (!lengthMatch) {
         this._buffer = this._buffer.slice(headerEnd + 4);
@@ -406,7 +408,7 @@ export class LspClient {
       const bodyStart = headerEnd + 4;
       if (this._buffer.length < bodyStart + contentLength) break;
 
-      const bodyStr = this._buffer.slice(bodyStart, bodyStart + contentLength);
+      const bodyStr = this._buffer.slice(bodyStart, bodyStart + contentLength).toString('utf-8');
       this._buffer = this._buffer.slice(bodyStart + contentLength);
 
       try {

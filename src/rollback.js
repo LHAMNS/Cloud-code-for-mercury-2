@@ -85,8 +85,8 @@ export class RollbackManager {
     // Enforce maximum checkpoint count — evict the oldest
     if (this.checkpoints.length >= MAX_CHECKPOINTS) {
       this.checkpoints.shift();
-      // Re-index remaining checkpoints to fix index mismatch after eviction
-      this.checkpoints.forEach((cp, i) => { cp.index = i; });
+      // Re-index remaining checkpoints starting from 0 after eviction
+      for (let i = 0; i < this.checkpoints.length; i++) { this.checkpoints[i].index = i; }
     }
 
     const cp = new Checkpoint({
@@ -124,8 +124,10 @@ export class RollbackManager {
    * @returns {{ messages: Array, restored: boolean, fileRestored: boolean }}
    */
   fullRollback(checkpointIndex, liveMessages) {
+    if (!Number.isInteger(checkpointIndex) || checkpointIndex < 0 || checkpointIndex >= this.checkpoints.length) {
+      return { messages: null, restored: false, fileRestored: false };
+    }
     const cp = this.checkpoints[checkpointIndex];
-    if (!cp) return { messages: null, restored: false, fileRestored: false };
 
     let fileRestored = false;
 

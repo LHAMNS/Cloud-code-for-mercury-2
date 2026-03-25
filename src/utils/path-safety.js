@@ -113,7 +113,7 @@ export function isValidGitRef(ref) {
   if (/^[a-fA-F0-9]{7,40}$/.test(ref)) return true;
   // Branch-like names: alphanumeric, hyphens, slashes, dots, underscores
   // Must not start/end with . or contain .. or end with .lock
-  if (/^[a-zA-Z0-9][a-zA-Z0-9._\/-]*[a-zA-Z0-9]$/.test(ref) &&
+  if (/^[a-zA-Z0-9]([a-zA-Z0-9._\/-]*[a-zA-Z0-9])?$/.test(ref) &&
       !ref.includes("..") &&
       !ref.endsWith(".lock")) {
     return true;

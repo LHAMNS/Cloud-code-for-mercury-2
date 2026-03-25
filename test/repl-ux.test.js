@@ -310,7 +310,7 @@ describe("REPL UX regressions", () => {
       runGit(repoDir, ["add", "."]);
       runGit(repoDir, ["config", "user.email", "test@example.com"]);
       runGit(repoDir, ["config", "user.name", "Test User"]);
-      runGit(repoDir, ["commit", "-m", "initial commit"]);
+      runGit(repoDir, ["-c", "commit.gpgsign=false", "commit", "-m", "initial commit"]);
     } catch (err) {
       console.error("Failed to set up git repository for test:", err.stderr?.toString());
       assert.fail("Git setup failed. Ensure git is installed and configured.");
